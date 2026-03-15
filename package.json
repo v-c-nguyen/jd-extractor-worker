@@ -1,0 +1,34 @@
+{
+  "name": "jd-extractor-worker",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev": "tsx src/sheets_smoketest.ts",
+    "poll": "tsx src/poller.ts",
+    "fetch": "tsx src/step5_fetcher.ts",
+    "extract": "tsx src/step6_extractor.ts",
+    "pipeline": "tsx src/pipeline.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@mozilla/readability": "^0.6.0",
+    "dotenv": "^17.2.4",
+    "googleapis": "^171.4.0",
+    "jsdom": "^28.0.0",
+    "openai": "^6.22.0",
+    "playwright": "^1.58.2",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/jsdom": "^27.0.0",
+    "@types/node": "^25.2.3",
+    "ts-node": "^10.9.2",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  }
+}
