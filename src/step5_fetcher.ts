@@ -18,11 +18,16 @@ import {
   isTooShort,
   classifyError,
 } from "./fetch/validate.js";
+import { runWithConcurrency } from "./concurrency.js";
 import { parseRetryCount, computeNextRetryAt } from "./retry.js";
+import { buildPromoteEmptyJobUrlBatch } from "./sheet_promote_new_rows.js";
 
 const POLL_INTERVAL_MS = 30_000;
+const DEFAULT_FETCH_CONCURRENCY = 3;
+const MIN_FETCH_CONCURRENCY = 1;
+const MAX_FETCH_CONCURRENCY = 10;
 const MAX_BATCH = 3;
-const DATA_RANGE = "A1:Z500";
+const DATA_RANGE = "A:Z";
 const ERROR_MESSAGE_MAX_LEN = 200;
 const CACHE_DIR = "cache";
 /** Rows stuck in fetching_in_progress longer than this are re-picked (recovery from crash). */
@@ -221,6 +226,26 @@ export async function runFetch(
     warnedMissingNextRetryAtCol = true;
   }
 
+  const { updates: promoteUpdates, promotedRowNums } = buildPromoteEmptyJobUrlBatch(
+    grid,
+    sheetTab,
+    jobUrlIdx,
+    statusIdx,
+    errorMessageIdx,
+    indexToColumnLetter
+  );
+  if (promoteUpdates.length > 0) {
+    await sheets.spreadsheets.values.batchUpdate({
+      spreadsheetId: sheetId,
+      requestBody: { valueInputOption: "RAW", data: promoteUpdates },
+    });
+    if (promotedRowNums.size > 0) {
+      console.log(
+        `[FETCH] Set status=new for ${promotedRowNums.size} row(s) with valid job_url and empty status`
+      );
+    }
+  }
+
   const toProcess: { sheetRowNum: number; url: string }[] = [];
   for (let i = 1; i < grid.length && toProcess.length < MAX_BATCH; i++) {
     const row = grid[i] ?? [];
@@ -262,187 +287,302 @@ export async function runFetch(
     requestBody: { valueInputOption: "RAW", data: claimData },
   });
 
-  for (const { sheetRowNum, url } of toProcess) {
-    const statusLetter = indexToColumnLetter(statusIdx);
-    const fetchedTextLenLetter = indexToColumnLetter(fetchedTextLenIdx);
-    const rawTextHashLetter = indexToColumnLetter(rawTextHashIdx);
-    const lastProcessedLetter = indexToColumnLetter(lastProcessedIdx);
-    const errorMessageLetter = indexToColumnLetter(errorMessageIdx);
-    const retryCountLetter =
-      retryCountIdx !== null ? indexToColumnLetter(retryCountIdx) : null;
-    const lastErrorStageLetter =
-      lastErrorStageIdx !== null ? indexToColumnLetter(lastErrorStageIdx) : null;
-    const nextRetryAtLetter =
-      nextRetryAtIdx !== null ? indexToColumnLetter(nextRetryAtIdx) : null;
+  const concurrencyRaw = process.env.FETCH_CONCURRENCY?.trim();
+  const parsed = concurrencyRaw ? Math.floor(Number(concurrencyRaw)) : DEFAULT_FETCH_CONCURRENCY;
+  const concurrency = Number.isNaN(parsed)
+    ? DEFAULT_FETCH_CONCURRENCY
+    : Math.min(MAX_FETCH_CONCURRENCY, Math.max(MIN_FETCH_CONCURRENCY, parsed));
+
+  type FetchRowSuccess = {
+    sheetRowNum: number;
+    url: string;
+    host: string;
+    outcome: "success";
+    text: string;
+    hash: string;
+    result: ExtractResult;
+    greenhouseClean?: { beforeLen: number; afterLen: number } | undefined;
+  };
+  type FetchRowBlocked = {
+    sheetRowNum: number;
+    host: string;
+    outcome: "blocked";
+    message: string;
+    stage: string;
+  };
+  type FetchRowTooShort = {
+    sheetRowNum: number;
+    host: string;
+    outcome: "too_short";
+    message: string;
+    stage: string;
+  };
+  type FetchRowError = {
+    sheetRowNum: number;
+    url: string;
+    host: string;
+    outcome: "error";
+    message: string;
+    stage: string;
+    status: "retry" | "failed";
+    currentRetryCount: number;
+    newRetryCount: number;
+    nextRetryAt: string | null;
+  };
+  type FetchRowResult =
+    | FetchRowSuccess
+    | FetchRowBlocked
+    | FetchRowTooShort
+    | FetchRowError;
+
+  const task = async (
+    item: { sheetRowNum: number; url: string }
+  ): Promise<FetchRowResult> => {
+    const { sheetRowNum, url } = item;
     const host = getHostname(url);
+    console.log(`[FETCH] starting row ${sheetRowNum}`);
 
     try {
       const result = await extractTextForUrl(url, browser);
       const text = normalizeText(result.text);
 
       if (isBlockedText(text)) {
-        const status = "failed";
         const message = getBlockedMessage(text);
         const stage =
           result.strategy === "playwright" || result.strategy === "http+playwright"
             ? "fetch_playwright"
             : "fetch_http";
-        const data: { range: string; values: (string | number)[][] }[] = [
-          { range: `${sheetTab}!${statusLetter}${sheetRowNum}`, values: [[status]] },
-          { range: `${sheetTab}!${errorMessageLetter}${sheetRowNum}`, values: [[message]] },
-          { range: `${sheetTab}!${lastProcessedLetter}${sheetRowNum}`, values: [[now]] },
-        ];
-        if (lastErrorStageLetter) {
-          data.push({
-            range: `${sheetTab}!${lastErrorStageLetter}${sheetRowNum}`,
-            values: [[stage]],
-          });
-        }
-        if (nextRetryAtLetter) {
-          data.push({
-            range: `${sheetTab}!${nextRetryAtLetter}${sheetRowNum}`,
-            values: [[""]],
-          });
-        }
-        await sheets.spreadsheets.values.batchUpdate({
-          spreadsheetId: sheetId,
-          requestBody: { valueInputOption: "RAW", data },
-        });
-        console.log(
-          `[FETCH] row ${sheetRowNum} host=${host} http_len=${result.httpLen} -> pw_len=${result.pwLen} ${status}: ${message}`
-        );
-        continue;
+        return {
+          sheetRowNum,
+          host,
+          outcome: "blocked",
+          message,
+          stage,
+        };
       }
 
       if (isTooShort(text)) {
-        const status = "failed";
         const message = `Text too short (${text.length} < ${MIN_LEN})`;
         const stage =
           result.strategy === "playwright" || result.strategy === "http+playwright"
             ? "fetch_playwright"
             : "fetch_http";
-        const data: { range: string; values: (string | number)[][] }[] = [
-          { range: `${sheetTab}!${statusLetter}${sheetRowNum}`, values: [[status]] },
-          { range: `${sheetTab}!${errorMessageLetter}${sheetRowNum}`, values: [[message]] },
-          { range: `${sheetTab}!${lastProcessedLetter}${sheetRowNum}`, values: [[now]] },
-        ];
-        if (lastErrorStageLetter) {
-          data.push({
-            range: `${sheetTab}!${lastErrorStageLetter}${sheetRowNum}`,
-            values: [[stage]],
-          });
-        }
-        if (nextRetryAtLetter) {
-          data.push({
-            range: `${sheetTab}!${nextRetryAtLetter}${sheetRowNum}`,
-            values: [[""]],
-          });
-        }
-        await sheets.spreadsheets.values.batchUpdate({
-          spreadsheetId: sheetId,
-          requestBody: { valueInputOption: "RAW", data },
-        });
-        console.log(
-          `[FETCH] row ${sheetRowNum} host=${host} http_len=${result.httpLen} -> pw_len=${result.pwLen} ${status}: ${message}`
-        );
-        continue;
+        return {
+          sheetRowNum,
+          host,
+          outcome: "too_short",
+          message,
+          stage,
+        };
       }
 
       const hash = sha256Hex(text);
       const cachePath = join(CACHE_DIR, `${hash}.txt`);
       writeFileSync(cachePath, text, "utf8");
 
-      const data: { range: string; values: (string | number)[][] }[] = [
-        { range: `${sheetTab}!${statusLetter}${sheetRowNum}`, values: [["extracting"]] },
-        { range: `${sheetTab}!${fetchedTextLenLetter}${sheetRowNum}`, values: [[text.length]] },
-        { range: `${sheetTab}!${rawTextHashLetter}${sheetRowNum}`, values: [[hash]] },
-        { range: `${sheetTab}!${errorMessageLetter}${sheetRowNum}`, values: [[""]] },
-        { range: `${sheetTab}!${lastProcessedLetter}${sheetRowNum}`, values: [[now]] },
-      ];
-
-      await sheets.spreadsheets.values.batchUpdate({
-        spreadsheetId: sheetId,
-        requestBody: { valueInputOption: "RAW", data },
-      });
-
-      const hashPreview =
-        hash.length > 12 ? hash.slice(0, 12) + "..." : hash;
-      
-      if (result.greenhouseClean) {
-        console.log(
-          `[FETCH][GH] row ${sheetRowNum} cleaned len ${result.greenhouseClean.beforeLen} -> ${result.greenhouseClean.afterLen}`
-        );
-      }
-      console.log(
-        `[FETCH] row ${sheetRowNum} host=${host} http_len=${result.httpLen} -> pw_len=${result.pwLen} OK len=${text.length} hash=${hashPreview}`
-      );
+      console.log(`[FETCH] finished row ${sheetRowNum} len=${text.length}`);
+      return {
+        sheetRowNum,
+        url,
+        host,
+        outcome: "success",
+        text,
+        hash,
+        result,
+        greenhouseClean: result.greenhouseClean,
+      };
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
       const classification = classifyError(errMsg);
-      const isTransient = classification === "retry";
       const message = truncateError(errMsg);
       const row = grid[sheetRowNum - 1] ?? [];
-
-      const currentRetryRaw =
-        retryCountIdx !== null ? row[retryCountIdx] : undefined;
-      const currentRetryCount = parseRetryCount(currentRetryRaw);
-
-      let newRetryCount = currentRetryCount;
-      let status = classification;
-      let nextRetryAt: string | null = null;
-
+      const currentRetryCount = parseRetryCount(
+        retryCountIdx !== null ? row[retryCountIdx] : undefined
+      );
       const stage = hostnameRequiresPlaywright(url)
         ? "fetch_playwright"
         : "fetch_http";
 
-      if (isTransient && retryCountIdx !== null && nextRetryAtIdx !== null) {
+      let status: "retry" | "failed" = classification;
+      let newRetryCount = currentRetryCount;
+      let nextRetryAt: string | null = null;
+
+      if (
+        classification === "retry" &&
+        retryCountIdx !== null &&
+        nextRetryAtIdx !== null
+      ) {
         if (currentRetryCount >= 3) {
           status = "failed";
           nextRetryAt = "";
-          console.log(
-            `[failed] row ${sheetRowNum} exceeded retries stage=${stage}`
-          );
         } else {
           newRetryCount = currentRetryCount + 1;
-          status = "retry";
           nextRetryAt = computeNextRetryAt(newRetryCount);
-          console.log(
-            `[RETRY] row ${sheetRowNum} retry_count=${newRetryCount} next_retry_at=${nextRetryAt} stage=${stage}`
-          );
         }
       }
 
-      const data: { range: string; values: (string | number)[][] }[] = [
-        { range: `${sheetTab}!${statusLetter}${sheetRowNum}`, values: [[status]] },
+      return {
+        sheetRowNum,
+        url,
+        host,
+        outcome: "error",
+        message,
+        stage,
+        status,
+        currentRetryCount,
+        newRetryCount,
+        nextRetryAt,
+      };
+    }
+  };
+
+  const results = await runWithConcurrency(toProcess, concurrency, task);
+
+  const statusLetter = indexToColumnLetter(statusIdx);
+  const fetchedTextLenLetter = indexToColumnLetter(fetchedTextLenIdx);
+  const rawTextHashLetter = indexToColumnLetter(rawTextHashIdx);
+  const lastProcessedLetter = indexToColumnLetter(lastProcessedIdx);
+  const errorMessageLetter = indexToColumnLetter(errorMessageIdx);
+  const retryCountLetter =
+    retryCountIdx !== null ? indexToColumnLetter(retryCountIdx) : null;
+  const lastErrorStageLetter =
+    lastErrorStageIdx !== null ? indexToColumnLetter(lastErrorStageIdx) : null;
+  const nextRetryAtLetter =
+    nextRetryAtIdx !== null ? indexToColumnLetter(nextRetryAtIdx) : null;
+
+  const allData: { range: string; values: (string | number)[][] }[] = [];
+
+  for (let i = 0; i < results.length; i++) {
+    const result = results[i]!;
+    const item = toProcess[i]!;
+    const sheetRowNum = item.sheetRowNum;
+
+    if (result.status === "rejected") {
+      const message = truncateError(
+        result.reason instanceof Error ? result.reason.message : String(result.reason)
+      );
+      allData.push(
+        { range: `${sheetTab}!${statusLetter}${sheetRowNum}`, values: [["failed"]] },
         { range: `${sheetTab}!${errorMessageLetter}${sheetRowNum}`, values: [[message]] },
-        { range: `${sheetTab}!${lastProcessedLetter}${sheetRowNum}`, values: [[now]] },
-      ];
+        { range: `${sheetTab}!${lastProcessedLetter}${sheetRowNum}`, values: [[now]] }
+      );
       if (lastErrorStageLetter) {
-        data.push({
+        allData.push({
           range: `${sheetTab}!${lastErrorStageLetter}${sheetRowNum}`,
-          values: [[stage]],
+          values: [["fetch_http"]],
         });
       }
-      if (retryCountLetter && newRetryCount !== currentRetryCount) {
-        data.push({
-          range: `${sheetTab}!${retryCountLetter}${sheetRowNum}`,
-          values: [[newRetryCount]],
+      console.log(`[FETCH] row ${sheetRowNum} failed: ${message}`);
+      continue;
+    }
+
+    const value = result.value;
+
+    if (value.outcome === "blocked") {
+      allData.push(
+        { range: `${sheetTab}!${statusLetter}${sheetRowNum}`, values: [["failed"]] },
+        { range: `${sheetTab}!${errorMessageLetter}${sheetRowNum}`, values: [[value.message]] },
+        { range: `${sheetTab}!${lastProcessedLetter}${sheetRowNum}`, values: [[now]] }
+      );
+      if (lastErrorStageLetter) {
+        allData.push({
+          range: `${sheetTab}!${lastErrorStageLetter}${sheetRowNum}`,
+          values: [[value.stage]],
         });
       }
-      if (nextRetryAtLetter && nextRetryAt !== null) {
-        data.push({
+      if (nextRetryAtLetter) {
+        allData.push({
           range: `${sheetTab}!${nextRetryAtLetter}${sheetRowNum}`,
-          values: [[nextRetryAt]],
+          values: [[""]],
         });
       }
-      await sheets.spreadsheets.values.batchUpdate({
-        spreadsheetId: sheetId,
-        requestBody: { valueInputOption: "RAW", data },
-      });
       console.log(
-        `[FETCH] row ${sheetRowNum} host=${host} ${status}: ${message}`
+        `[FETCH] row ${sheetRowNum} host=${value.host} failed: ${value.message}`
+      );
+      continue;
+    }
+
+    if (value.outcome === "too_short") {
+      allData.push(
+        { range: `${sheetTab}!${statusLetter}${sheetRowNum}`, values: [["failed"]] },
+        { range: `${sheetTab}!${errorMessageLetter}${sheetRowNum}`, values: [[value.message]] },
+        { range: `${sheetTab}!${lastProcessedLetter}${sheetRowNum}`, values: [[now]] }
+      );
+      if (lastErrorStageLetter) {
+        allData.push({
+          range: `${sheetTab}!${lastErrorStageLetter}${sheetRowNum}`,
+          values: [[value.stage]],
+        });
+      }
+      if (nextRetryAtLetter) {
+        allData.push({
+          range: `${sheetTab}!${nextRetryAtLetter}${sheetRowNum}`,
+          values: [[""]],
+        });
+      }
+      console.log(
+        `[FETCH] row ${sheetRowNum} host=${value.host} failed: ${value.message}`
+      );
+      continue;
+    }
+
+    if (value.outcome === "error") {
+      allData.push(
+        { range: `${sheetTab}!${statusLetter}${sheetRowNum}`, values: [[value.status]] },
+        { range: `${sheetTab}!${errorMessageLetter}${sheetRowNum}`, values: [[value.message]] },
+        { range: `${sheetTab}!${lastProcessedLetter}${sheetRowNum}`, values: [[now]] }
+      );
+      if (lastErrorStageLetter) {
+        allData.push({
+          range: `${sheetTab}!${lastErrorStageLetter}${sheetRowNum}`,
+          values: [[value.stage]],
+        });
+      }
+      if (retryCountLetter && value.newRetryCount !== value.currentRetryCount) {
+        allData.push({
+          range: `${sheetTab}!${retryCountLetter}${sheetRowNum}`,
+          values: [[value.newRetryCount]],
+        });
+      }
+      if (nextRetryAtLetter) {
+        allData.push({
+          range: `${sheetTab}!${nextRetryAtLetter}${sheetRowNum}`,
+          values: [[value.nextRetryAt ?? ""]],
+        });
+      }
+      if (value.status === "retry") {
+        console.log(
+          `[RETRY] row ${sheetRowNum} retry_count=${value.newRetryCount} next_retry_at=${value.nextRetryAt} stage=${value.stage}`
+        );
+      } else {
+        console.log(
+          `[failed] row ${sheetRowNum} exceeded retries stage=${value.stage}`
+        );
+      }
+      console.log(`[FETCH] row ${sheetRowNum} host=${value.host} ${value.status}: ${value.message}`);
+      continue;
+    }
+
+    // value.outcome === "success"
+    allData.push(
+      { range: `${sheetTab}!${statusLetter}${sheetRowNum}`, values: [["extracting"]] },
+      { range: `${sheetTab}!${fetchedTextLenLetter}${sheetRowNum}`, values: [[value.text.length]] },
+      { range: `${sheetTab}!${rawTextHashLetter}${sheetRowNum}`, values: [[value.hash]] },
+      { range: `${sheetTab}!${errorMessageLetter}${sheetRowNum}`, values: [[""]] },
+      { range: `${sheetTab}!${lastProcessedLetter}${sheetRowNum}`, values: [[now]] }
+    );
+    if (value.greenhouseClean) {
+      console.log(
+        `[FETCH][GH] row ${sheetRowNum} cleaned len ${value.greenhouseClean.beforeLen} -> ${value.greenhouseClean.afterLen}`
       );
     }
+  }
+
+  if (allData.length > 0) {
+    await sheets.spreadsheets.values.batchUpdate({
+      spreadsheetId: sheetId,
+      requestBody: { valueInputOption: "RAW", data: allData },
+    });
   }
 }
 

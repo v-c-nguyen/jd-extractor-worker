@@ -2,7 +2,12 @@ import "dotenv/config";
 import { google } from "googleapis";
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import { add as dedupAdd, has as dedupHas } from "./dedup/hash_store.js";
 import { extractJobFields } from "./extract/openai_extract.js";
+import {
+  extractWithRules,
+  mergeRuleIntoExtraction,
+} from "./extract/rule_extractor.js";
 import type { JobExtraction } from "./extract/schema.js";
 import {
   validateExtraction,
@@ -12,7 +17,7 @@ import { parseRetryCount, computeNextRetryAt } from "./retry.js";
 
 const POLL_INTERVAL_MS = 30_000;
 const MAX_BATCH = 3;
-const DATA_RANGE = "A1:Z500";
+const DATA_RANGE = "A:Z";
 const ERROR_MESSAGE_MAX_LEN = 200;
 const CACHE_DIR = "cache";
 /** Rows stuck in extracting_in_progress longer than this are re-picked (recovery from crash). */
@@ -99,6 +104,47 @@ function isClaimStale(lastProcessedAtVal: unknown): boolean {
   if (!s) return true;
   const t = Date.parse(s);
   return Number.isNaN(t) || Date.now() - t > EXTRACT_CLAIM_STALE_MS;
+}
+
+/** Not usable: Staff | Principal | Lead */
+const NOT_USABLE_SENIORITY = new Set(["Staff", "Principal", "Lead"]);
+
+/** Industries that should route to usable_for_saul (lowercase). */
+const USABLE_FOR_SAUL_INDUSTRIES = new Set(["healthcare", "finance"]);
+/** Not usable industries (lowercase), excluding usable_for_saul industries. */
+const NOT_USABLE_INDUSTRIES = new Set(["bank", "news", "security"]);
+
+function getExtractionStatusForPassedValidation(
+  extraction: JobExtraction
+): "usable" | "usable_for_saul" | "not_usable" {
+  const seniority = extraction.seniority?.trim();
+  if (seniority && NOT_USABLE_SENIORITY.has(seniority)) return "not_usable";
+
+  const workMode = extraction.work_mode?.trim();
+  if (workMode === "Hybrid" || workMode === "Onsite") return "not_usable";
+
+  const travelStr = extraction.travel?.trim() ?? "";
+  if (travelStr) {
+    const match = travelStr.match(/(\d{1,3})\s*%?/);
+    if (match) {
+      const pct = parseInt(match[1]!, 10);
+      if (!Number.isNaN(pct) && pct > 25) return "not_usable";
+    }
+  }
+
+  if (extraction.location?.trim().toLowerCase() === "no") return "not_usable";
+
+  const industry = extraction.industry?.trim().toLowerCase() ?? "";
+  if (industry && USABLE_FOR_SAUL_INDUSTRIES.has(industry)) return "usable_for_saul";
+  if (industry && (NOT_USABLE_INDUSTRIES.has(industry) || industry.includes("news")))
+    return "not_usable";
+
+  if (extraction.clearance_required?.trim().toLowerCase() === "yes")
+    return "not_usable";
+  if (extraction.government_agency?.trim().toLowerCase() === "yes")
+    return "not_usable";
+
+  return "usable";
 }
 
 interface ColumnIndices {
@@ -207,6 +253,98 @@ async function batchUpdateRowCells(
   });
 }
 
+async function getTabNumericSheetId(
+  sheets: ReturnType<typeof google.sheets>,
+  spreadsheetId: string,
+  tabTitle: string
+): Promise<number> {
+  const meta = await sheets.spreadsheets.get({
+    spreadsheetId,
+    fields: "sheets(properties(sheetId,title))",
+  });
+  const sheet = meta.data.sheets?.find(
+    (s) => (s.properties?.title ?? "") === tabTitle
+  );
+  const id = sheet?.properties?.sheetId;
+  if (id === undefined || id === null) {
+    throw new Error(`Sheet tab not found: ${tabTitle}`);
+  }
+  return id;
+}
+
+/**
+ * Delete terminal rows (never row 1) whose status is not_usable or duplicate.
+ * Runs only when there are no active fetch/extract statuses in the sheet.
+ */
+async function removeTerminalRowsWhenPipelineIdle(
+  sheets: ReturnType<typeof google.sheets>,
+  spreadsheetId: string,
+  sheetTab: string,
+  statusColIndex: number
+): Promise<void> {
+  const range = `${sheetTab}!${DATA_RANGE}`;
+  const res = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range,
+  });
+  const grid = res.data.values ?? [];
+  let hasActiveProcessing = false;
+  const rowsToDelete1Based: number[] = [];
+  for (let i = 1; i < grid.length; i++) {
+    const row = grid[i] ?? [];
+    const st = String(row[statusColIndex] ?? "").trim().toLowerCase();
+    if (
+      st === "fetching" ||
+      st === "fetching_in_progress" ||
+      st === "extracting" ||
+      st === "extracting_in_progress"
+    ) {
+      hasActiveProcessing = true;
+      break;
+    }
+    if (st === "not_usable" || st === "duplicate") {
+      rowsToDelete1Based.push(i + 1);
+    }
+  }
+  if (hasActiveProcessing) {
+    console.log("[EXTRACT] Skip row cleanup: active fetching/extracting rows still exist");
+    return;
+  }
+  if (rowsToDelete1Based.length === 0) {
+    return;
+  }
+
+  const tabSheetId = await getTabNumericSheetId(
+    sheets,
+    spreadsheetId,
+    sheetTab
+  );
+  const uniqueDesc = [...new Set(rowsToDelete1Based.filter((r) => r > 1))].sort(
+    (a, b) => b - a
+  );
+  const requests = uniqueDesc.map((row1Based) => ({
+    deleteDimension: {
+      range: {
+        sheetId: tabSheetId,
+        dimension: "ROWS" as const,
+        startIndex: row1Based - 1,
+        endIndex: row1Based,
+      },
+    },
+  }));
+
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId,
+    requestBody: { requests },
+  });
+  console.log(
+    `[EXTRACT] Removed ${uniqueDesc.length} terminal row(s) [not_usable|duplicate]: ${uniqueDesc
+      .slice()
+      .sort((a, b) => a - b)
+      .join(", ")}`
+  );
+}
+
 interface SuccessUpdatesResult {
   updates: { col: number; row: number; value: string | number }[];
   wroteSalaryJson: boolean;
@@ -231,14 +369,14 @@ function buildSuccessUpdates(
   options?: {
     salaryJson?: string;
     validation?: {
-      finalStatus: "done" | "retry" | "failed";
+      finalStatus: "usable" | "usable_for_saul" | "not_usable" | "retry" | "failed";
       validationStatus: "pass" | "retry" | "failed";
       validationNotes: string;
       confidenceScore: number;
     };
   }
 ): SuccessUpdatesResult {
-  const statusValue = options?.validation?.finalStatus ?? "done";
+  const statusValue = options?.validation?.finalStatus ?? "usable";
 
   const updates: { col: number; row: number; value: string | number }[] = [
     // Required columns
@@ -398,22 +536,48 @@ export async function runExtract(
 
   if (toProcess.length === 0) {
     console.log("[EXTRACT] No rows to process");
+    await removeTerminalRowsWhenPipelineIdle(sheets, sheetId, sheetTab, cols.status);
     return;
   }
 
   const now = new Date().toISOString();
 
-  // Claim rows so other processes don't pick them (avoids duplicate LLM calls / token waste).
+  // Dedup: skip extraction if this JD hash was already processed.
+  const toDedup = toProcess.filter((item) => dedupHas(item.hash));
+  const toExtract = toProcess.filter((item) => !dedupHas(item.hash));
+
+  const allUpdates: { col: number; row: number; value: string | number }[] = [];
+
+  for (const { sheetRowNum } of toDedup) {
+    allUpdates.push(
+      { col: cols.status, row: sheetRowNum, value: "duplicate" },
+      { col: cols.lastProcessedAt, row: sheetRowNum, value: now },
+      { col: cols.errorMessage, row: sheetRowNum, value: "" }
+    );
+    console.log("[DEDUP] hash found, skipping extraction");
+  }
+
+  // Claim only rows we will actually extract (avoids duplicate LLM calls / token waste).
   const claimUpdates: { col: number; row: number; value: string | number }[] = [];
-  for (const { sheetRowNum } of toProcess) {
+  for (const { sheetRowNum } of toExtract) {
     claimUpdates.push(
       { col: cols.status, row: sheetRowNum, value: "extracting_in_progress" },
       { col: cols.lastProcessedAt, row: sheetRowNum, value: now }
     );
   }
-  await batchUpdateRowCells(sheets, sheetId, sheetTab, claimUpdates);
+  if (claimUpdates.length > 0) {
+    await batchUpdateRowCells(sheets, sheetId, sheetTab, claimUpdates);
+  }
 
-  console.log(`[EXTRACT] Found ${toProcess.length} row(s) to process (parallel)`);
+  if (toExtract.length === 0) {
+    if (allUpdates.length > 0) {
+      await batchUpdateRowCells(sheets, sheetId, sheetTab, allUpdates);
+    }
+    await removeTerminalRowsWhenPipelineIdle(sheets, sheetId, sheetTab, cols.status);
+    return;
+  }
+
+  console.log(`[EXTRACT] Found ${toExtract.length} row(s) to process (parallel)`);
 
   type ExtractionResult = {
     sheetRowNum: number;
@@ -425,29 +589,42 @@ export async function runExtract(
   };
 
   const results = await Promise.allSettled(
-    toProcess.map(async ({ sheetRowNum, jobUrl, hash }): Promise<ExtractionResult> => {
+    toExtract.map(async ({ sheetRowNum, jobUrl, hash }): Promise<ExtractionResult> => {
       const cachePath = join(CACHE_DIR, `${hash}.txt`);
       if (!existsSync(cachePath)) {
         throw new Error(`Cache file not found: ${hash.slice(0, 12)}...`);
       }
       const jdText = readFileSync(cachePath, "utf8");
-      const { extraction, usage } = await extractJobFields(jdText, jobUrl);
+
+      const ruleResult = extractWithRules(jdText);
+      for (const field of ruleResult.detected) {
+        console.log(`[RULE] ${field} detected`);
+      }
+
+      const { extraction: openAIExtraction, usage } = await extractJobFields(
+        jdText,
+        jobUrl
+      );
+      const extraction = mergeRuleIntoExtraction(
+        openAIExtraction,
+        ruleResult.extraction
+      );
+
       return { sheetRowNum, jobUrl, hash, jdText, extraction, usage };
     })
   );
-
-  const allUpdates: { col: number; row: number; value: string | number }[] = [];
 
   let batchPromptTokens = 0;
   let batchCompletionTokens = 0;
   let batchTotalTokens = 0;
 
   for (let i = 0; i < results.length; i++) {
-    const item = toProcess[i]!;
+    const item = toExtract[i]!;
     const result = results[i]!;
 
     if (result.status === "fulfilled") {
-      const { sheetRowNum, jdText, extraction, usage } = result.value;
+      const { sheetRowNum, jdText, extraction, usage, hash } = result.value;
+      dedupAdd(hash);
       batchPromptTokens += usage.prompt_tokens;
       batchCompletionTokens += usage.completion_tokens;
       batchTotalTokens += usage.total_tokens;
@@ -479,13 +656,13 @@ export async function runExtract(
         cols.retryCount !== null ? row[cols.retryCount] : undefined;
       const currentRetryCount = parseRetryCount(currentRetryRaw);
 
-      let finalRowStatus: "done" | "retry" | "failed";
+      let finalRowStatus: "usable" | "usable_for_saul" | "not_usable" | "retry" | "failed";
       let newRetryCount = currentRetryCount;
       let nextRetryAt: string | null = null;
       let lastErrorStageValue: string | null = null;
 
       if (validationResult.validation_status === "pass") {
-        finalRowStatus = "done";
+        finalRowStatus = getExtractionStatusForPassedValidation(extraction);
       } else if (validationResult.validation_status === "retry") {
         finalRowStatus = "retry";
         lastErrorStageValue = "validation";
@@ -552,7 +729,7 @@ export async function runExtract(
 
       const company = extraction.company_name ?? "Unknown";
       const role = extraction.role_title ?? "Unknown";
-      let logLine = `[EXTRACT] row ${sheetRowNum} ${validationResult.validation_status} score=${validationResult.confidence_score} company=${company} role=${role}`;
+      let logLine = `[EXTRACT] row ${sheetRowNum} ${validationResult.validation_status} -> ${finalRowStatus} score=${validationResult.confidence_score} company=${company} role=${role}`;
       if (validationResult.validation_notes) {
         logLine += ` notes=${validationResult.validation_notes}`;
       }
@@ -643,6 +820,7 @@ export async function runExtract(
   if (allUpdates.length > 0) {
     await batchUpdateRowCells(sheets, sheetId, sheetTab, allUpdates);
   }
+  await removeTerminalRowsWhenPipelineIdle(sheets, sheetId, sheetTab, cols.status);
 }
 
 async function main(): Promise<void> {

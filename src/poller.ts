@@ -1,10 +1,11 @@
 import "dotenv/config";
 import { google } from "googleapis";
+import { buildPromoteEmptyJobUrlBatch } from "./sheet_promote_new_rows.js";
 
 const POLL_INTERVAL_MS = 30_000;
 /** Must be <= Fetch/Extract MAX_BATCH so we don't add more "fetching" than can be drained per cycle. */
 const MAX_BATCH = 3;
-const DATA_RANGE = "A1:Z500";
+const DATA_RANGE = "A:Z";
 
 function indexToColumnLetter(index: number): string {
   let colNum = index + 1;
@@ -91,6 +92,26 @@ export async function runPoll(
     warnedMissingNextRetryAtCol = true;
   }
 
+  const { updates: promoteUpdates, promotedRowNums } = buildPromoteEmptyJobUrlBatch(
+    grid,
+    sheetTab,
+    jobUrlIdx,
+    statusIdx,
+    errorMessageIdx,
+    indexToColumnLetter
+  );
+  if (promoteUpdates.length > 0) {
+    await sheets.spreadsheets.values.batchUpdate({
+      spreadsheetId: sheetId,
+      requestBody: { valueInputOption: "RAW", data: promoteUpdates },
+    });
+    if (promotedRowNums.size > 0) {
+      console.log(
+        `[POLL] Set status=new for ${promotedRowNums.size} row(s) with valid job_url and empty status`
+      );
+    }
+  }
+
   const toClaim: { sheetRowNum: number; url: string }[] = [];
   const now = new Date();
   const nowTime = now.getTime();
@@ -102,7 +123,8 @@ export async function runPoll(
       jobUrl !== undefined && String(jobUrl).trim() !== "";
     const statusUpper = String(status ?? "").trim().toUpperCase();
 
-    const isNew = statusUpper === "NEW";
+    const isNew =
+      statusUpper === "NEW" || promotedRowNums.has(i + 1);
 
     let isRetryEligible = false;
     if (statusUpper === "RETRY") {
