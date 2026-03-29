@@ -13,7 +13,8 @@
     "pipeline": "tsx src/pipeline.ts",
     "pipeline:once": "tsx src/pipeline-one-cycle.ts",
     "dashboard": "next dev",
-    "build": "next build"
+    "build": "next build",
+    "create-user": "tsx scripts/create-app-user.ts"
   },
   "keywords": [],
   "author": "",
@@ -23,6 +24,7 @@
     "@neondatabase/serverless": "^1.0.2",
     "@radix-ui/react-label": "^2.1.0",
     "@radix-ui/react-slot": "^1.1.0",
+    "bcryptjs": "^3.0.3",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.1",
     "dotenv": "^17.2.4",
@@ -30,6 +32,7 @@
     "jsdom": "^28.0.0",
     "lucide-react": "^0.468.0",
     "next": "^15.1.0",
+    "next-auth": "^5.0.0-beta.30",
     "openai": "^6.22.0",
     "playwright": "^1.58.2",
     "react": "^19.0.0",
@@ -39,6 +42,7 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
     "@types/jsdom": "^27.0.0",
     "@types/node": "^25.2.3",
     "@types/react": "^19.0.0",

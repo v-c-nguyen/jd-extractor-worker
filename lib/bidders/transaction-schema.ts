@@ -6,6 +6,7 @@ const dateStr = z
   .regex(/^\d{4}-\d{2}-\d{2}$/, "occurredOn must be YYYY-MM-DD");
 
 const networkEnum = z.enum(["BEP20", "ERC20", "OTHER"]);
+const statusEnum = z.enum(["Pending", "Confirmed", "Paid"]);
 
 const amountField = z.coerce
   .number()
@@ -14,7 +15,6 @@ const amountField = z.coerce
   .max(1e18, "amount is too large");
 
 const entryTypeField = z.string().trim().min(1, "type is required").max(200);
-const statusField = z.string().trim().min(1, "status is required").max(120);
 const txHashCreate = z
   .string()
   .trim()
@@ -28,7 +28,7 @@ export const createBidderTransactionSchema = z.object({
   entryType: entryTypeField,
   amount: amountField,
   network: networkEnum,
-  status: statusField,
+  status: statusEnum,
   txHash: txHashCreate,
 });
 
@@ -38,7 +38,7 @@ export const patchBidderTransactionSchema = z
     entryType: entryTypeField.optional(),
     amount: amountField.optional(),
     network: networkEnum.optional(),
-    status: statusField.optional(),
+    status: statusEnum.optional(),
     txHash: txHashPatch,
   })
   .refine((o) => Object.keys(o).length > 0, { message: "At least one field is required" });

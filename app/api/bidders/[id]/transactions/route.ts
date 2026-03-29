@@ -19,7 +19,8 @@ function defaultRange(): { from: string; to: string } {
   return { from: iso(from), to: iso(to) };
 }
 
-const TX_SCHEMA_HINT = "Run db/migrations/004_bidder_transactions.sql on your database.";
+const TX_SCHEMA_HINT =
+  "Run db/migrations/004_bidder_transactions.sql and 005_bidder_transaction_status_enum.sql on your database.";
 
 function isTxSchemaError(msg: string): boolean {
   if (msg.includes("bidder_transactions") && msg.includes("does not exist")) return true;

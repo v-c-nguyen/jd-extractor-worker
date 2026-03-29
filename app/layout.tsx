@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { DM_Sans } from "next/font/google";
 import "./globals.css";
-import { DashboardNav } from "@/components/dashboard-nav";
+import { AuthSessionProvider } from "@/components/auth-session-provider";
 
 const dmSans = DM_Sans({
   subsets: ["latin"],
@@ -25,12 +25,7 @@ export default function RootLayout({
   return (
     <html lang="en" className={dmSans.variable}>
       <body className="min-h-screen bg-background font-sans antialiased">
-        <div className="app-surface flex min-h-screen flex-col">
-          <DashboardNav />
-          <main className="flex-1 px-4 py-8 md:px-8 md:py-10">
-            <div className="mx-auto w-full max-w-7xl">{children}</div>
-          </main>
-        </div>
+        <AuthSessionProvider>{children}</AuthSessionProvider>
       </body>
     </html>
   );

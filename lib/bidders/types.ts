@@ -30,6 +30,8 @@ export type BidderWorkEntry = {
 
 export type BidderTransactionNetwork = "BEP20" | "ERC20" | "OTHER";
 
+export type BidderTransactionStatus = "Pending" | "Confirmed" | "Paid";
+
 export type BidderTransaction = {
   id: string;
   bidderId: string;
@@ -37,7 +39,7 @@ export type BidderTransaction = {
   entryType: string;
   amount: number;
   network: BidderTransactionNetwork;
-  status: string;
+  status: BidderTransactionStatus;
   txHash: string;
   createdAt: string;
   updatedAt: string;

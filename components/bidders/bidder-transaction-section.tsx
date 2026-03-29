@@ -14,7 +14,12 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
-import type { Bidder, BidderTransaction, BidderTransactionNetwork } from "@/lib/bidders/types";
+import type {
+  Bidder,
+  BidderTransaction,
+  BidderTransactionNetwork,
+  BidderTransactionStatus,
+} from "@/lib/bidders/types";
 import { Loader2, Pencil, Trash2 } from "lucide-react";
 
 function todayIsoUtc(): string {
@@ -46,13 +51,25 @@ const NETWORK_OPTIONS: { value: BidderTransactionNetwork; label: string }[] = [
   { value: "OTHER", label: "Other" },
 ];
 
+const STATUS_OPTIONS: { value: BidderTransactionStatus; label: string }[] = [
+  { value: "Pending", label: "Pending" },
+  { value: "Confirmed", label: "Confirmed" },
+  { value: "Paid", label: "Paid" },
+];
+
+function statusBadgeVariant(status: BidderTransactionStatus): "outline" | "secondary" {
+  if (status === "Paid") return "outline";
+  if (status === "Confirmed") return "outline";
+  return "secondary";
+}
+
 function emptyForm() {
   return {
     occurredOn: todayIsoUtc(),
     entryType: "",
     amountStr: "",
     network: "OTHER" as BidderTransactionNetwork,
-    status: "",
+    status: "Pending" as BidderTransactionStatus,
     txHash: "",
   };
 }
@@ -168,10 +185,6 @@ export function BidderTransactionSection() {
       setSaveError("Type is required.");
       return;
     }
-    if (!form.status.trim()) {
-      setSaveError("Status is required.");
-      return;
-    }
 
     setSaving(true);
     setSaveError(null);
@@ -181,7 +194,7 @@ export function BidderTransactionSection() {
         entryType: form.entryType.trim(),
         amount,
         network: form.network,
-        status: form.status.trim(),
+        status: form.status,
         txHash: form.txHash.trim(),
       };
       if (editingId) {
@@ -339,13 +352,24 @@ export function BidderTransactionSection() {
               </div>
               <div className="space-y-2">
                 <Label htmlFor="tx-status">Status</Label>
-                <Input
+                <select
                   id="tx-status"
-                  placeholder="e.g. Paid, Pending, Confirmed"
+                  className={cn(
+                    "flex h-10 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm",
+                    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  )}
                   value={form.status}
-                  onChange={(e) => setForm((f) => ({ ...f, status: e.target.value }))}
+                  onChange={(e) =>
+                    setForm((f) => ({ ...f, status: e.target.value as BidderTransactionStatus }))
+                  }
                   disabled={txLoading || saving}
-                />
+                >
+                  {STATUS_OPTIONS.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
               </div>
               <div className="space-y-2 lg:col-span-2">
                 <Label htmlFor="tx-hash">Transaction hash</Label>
@@ -441,9 +465,7 @@ export function BidderTransactionSection() {
                             <Badge variant="outline">{row.network}</Badge>
                           </TableCell>
                           <TableCell className="hidden lg:table-cell">
-                            <Badge variant={row.status.toLowerCase() === "paid" ? "outline" : "secondary"}>
-                              {row.status}
-                            </Badge>
+                            <Badge variant={statusBadgeVariant(row.status)}>{row.status}</Badge>
                           </TableCell>
                           <TableCell
                             className="hidden max-w-[14rem] truncate font-mono text-xs text-muted-foreground xl:table-cell"

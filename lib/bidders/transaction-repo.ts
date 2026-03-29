@@ -1,5 +1,9 @@
 import { getSql } from "@/lib/db/neon-sql";
-import type { BidderTransaction, BidderTransactionNetwork } from "@/lib/bidders/types";
+import type {
+  BidderTransaction,
+  BidderTransactionNetwork,
+  BidderTransactionStatus,
+} from "@/lib/bidders/types";
 import type {
   CreateBidderTransactionInput,
   PatchBidderTransactionInput,
@@ -32,6 +36,12 @@ function mapNetwork(v: unknown): BidderTransactionNetwork {
   return "OTHER";
 }
 
+function mapStatus(v: unknown): BidderTransactionStatus {
+  const s = String(v ?? "").trim();
+  if (s === "Pending" || s === "Confirmed" || s === "Paid") return s;
+  return "Pending";
+}
+
 type TxRow = {
   id: string;
   bidder_id: string;
@@ -53,7 +63,7 @@ function mapTxRow(row: TxRow): BidderTransaction {
     entryType: row.entry_type,
     amount: mapAmount(row.amount),
     network: mapNetwork(row.network),
-    status: row.status,
+    status: mapStatus(row.status),
     txHash: row.tx_hash ?? "",
     createdAt: toIso(row.created_at),
     updatedAt: toIso(row.updated_at),

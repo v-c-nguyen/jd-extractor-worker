@@ -3,13 +3,21 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { LayoutDashboard, SlidersHorizontal, Users, CalendarClock } from "lucide-react";
+import {
+  LayoutDashboard,
+  SlidersHorizontal,
+  Users,
+  CalendarClock,
+  CircleUserRound,
+} from "lucide-react";
+import { SignOutButton } from "@/components/account/sign-out-button";
 
 const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/job-extractor", label: "Job extractor", icon: SlidersHorizontal },
   { href: "/bidders", label: "Bidders", icon: Users },
   { href: "/interviews", label: "Interviews", icon: CalendarClock },
+  { href: "/me", label: "My account", icon: CircleUserRound },
 ] as const;
 
 export function DashboardNav() {
@@ -56,6 +64,7 @@ export function DashboardNav() {
             );
           })}
         </nav>
+        <SignOutButton />
       </div>
     </header>
   );

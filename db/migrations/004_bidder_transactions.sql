@@ -7,7 +7,7 @@ CREATE TABLE IF NOT EXISTS bidder_transactions (
   entry_type TEXT NOT NULL,
   amount NUMERIC(24, 8) NOT NULL CHECK (amount >= 0),
   network TEXT NOT NULL CHECK (network IN ('BEP20', 'ERC20', 'OTHER')),
-  status TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('Pending', 'Confirmed', 'Paid')),
   tx_hash TEXT NOT NULL DEFAULT '',
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
