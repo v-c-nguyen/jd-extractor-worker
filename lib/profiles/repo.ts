@@ -108,6 +108,18 @@ export async function listProfiles(search?: string): Promise<Profile[]> {
   return rows.map((row) => mapRow(row));
 }
 
+export async function listProfilesForBidder(
+  bidderId: string
+): Promise<{ id: string; name: string }[]> {
+  const sql = getSql();
+  return (await sql`
+    SELECT id, name
+    FROM profiles
+    WHERE bidder_id = ${bidderId}::uuid
+    ORDER BY lower(name) ASC, id ASC
+  `) as { id: string; name: string }[];
+}
+
 export async function getProfileById(id: string): Promise<Profile | null> {
   const sql = getSql();
   const rows = (await sql`

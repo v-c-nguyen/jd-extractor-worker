@@ -2,15 +2,12 @@ import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { auth } from "@/auth";
 import { MePageClient } from "@/components/account/me-page-client";
-import {
-  getUserProfileById,
-  listRecentDailyReports,
-  type DailyReportRow,
-} from "@/lib/auth/user-repo";
+import { getUserProfileById } from "@/lib/auth/user-repo";
+import { listRecentWorkDateSummaries } from "@/lib/bidders/work-repo";
 
 export const metadata: Metadata = {
   title: "My account",
-  description: "Profile, password, and daily reports.",
+  description: "Profile, password, and daily work by profile.",
 };
 
 export default async function MePage() {
@@ -36,17 +33,18 @@ export default async function MePage() {
     redirect("/signin");
   }
 
-  let initialReports: DailyReportRow[];
-  try {
-    initialReports = await listRecentDailyReports(userId, 30);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : "";
-    if (msg.includes("DATABASE_URL")) {
-      throw err;
+  let initialSummaries: { workDate: string; bidCount: number; interviewCount: number }[] = [];
+  if (profile.bidderId) {
+    try {
+      initialSummaries = await listRecentWorkDateSummaries(profile.bidderId, 30);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "";
+      if (msg.includes("DATABASE_URL")) {
+        throw err;
+      }
+      console.error("[me page summaries]", err);
     }
-    console.error("[me page reports]", err);
-    initialReports = [];
   }
 
-  return <MePageClient profile={profile} initialReports={initialReports} />;
+  return <MePageClient profile={profile} initialSummaries={initialSummaries} />;
 }

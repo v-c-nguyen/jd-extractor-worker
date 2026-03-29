@@ -7,19 +7,26 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
-type Profile = {
+type AccountProfile = {
   id: string;
   email: string;
   name: string | null;
   createdAt: string;
+  bidderId: string | null;
 };
 
-type ReportRow = {
+type AssignedProfile = { id: string; name: string };
+
+type WorkEntry = {
   id: string;
-  report_date: string;
-  body: string;
-  updated_at: string;
+  profileId: string;
+  profileName: string;
+  workDate: string;
+  bidCount: number;
+  interviewCount: number;
 };
+
+type DateSummary = { workDate: string; bidCount: number; interviewCount: number };
 
 function localTodayYmd(): string {
   const d = new Date();
@@ -29,14 +36,19 @@ function localTodayYmd(): string {
   return `${y}-${m}-${day}`;
 }
 
+function clampNonNegInt(n: number): number {
+  if (!Number.isFinite(n) || n < 0) return 0;
+  return Math.min(1_000_000, Math.trunc(n));
+}
+
 export function MePageClient({
   profile,
-  initialReports,
+  initialSummaries,
 }: {
-  profile: Profile;
-  initialReports: ReportRow[];
+  profile: AccountProfile;
+  initialSummaries: DateSummary[];
 }) {
-  const [reports, setReports] = useState<ReportRow[]>(initialReports);
+  const [summaries, setSummaries] = useState<DateSummary[]>(initialSummaries);
 
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -45,37 +57,66 @@ export function MePageClient({
   const [pwError, setPwError] = useState<string | null>(null);
   const [pwPending, setPwPending] = useState(false);
 
-  const [reportDate, setReportDate] = useState(localTodayYmd);
-  const [reportBody, setReportBody] = useState("");
-  const [reportMessage, setReportMessage] = useState<string | null>(null);
-  const [reportError, setReportError] = useState<string | null>(null);
-  const [reportPending, setReportPending] = useState(false);
+  const [workDate, setWorkDate] = useState(localTodayYmd);
+  const [assignedProfiles, setAssignedProfiles] = useState<AssignedProfile[]>([]);
+  const [counts, setCounts] = useState<Record<string, { bid: number; interview: number }>>({});
+  const [workMessage, setWorkMessage] = useState<string | null>(null);
+  const [workError, setWorkError] = useState<string | null>(null);
+  const [workPending, setWorkPending] = useState(false);
   const [loadPending, setLoadPending] = useState(false);
 
-  const loadReportForDate = useCallback(async (date: string) => {
+  const loadDay = useCallback(async (date: string) => {
     setLoadPending(true);
-    setReportError(null);
-    setReportMessage(null);
+    setWorkError(null);
+    setWorkMessage(null);
     try {
-      const res = await fetch(`/api/me/daily-report?date=${encodeURIComponent(date)}`);
-      const data = (await res.json()) as { report?: ReportRow | null; error?: string };
+      const res = await fetch(`/api/me/daily-work?date=${encodeURIComponent(date)}`);
+      const data = (await res.json()) as {
+        profiles?: AssignedProfile[];
+        entries?: WorkEntry[];
+        error?: string;
+      };
       if (!res.ok) {
-        setReportError(data.error ?? "Failed to load report");
-        setReportBody("");
+        setWorkError(data.error ?? "Failed to load");
+        setAssignedProfiles([]);
+        setCounts({});
         return;
       }
-      setReportBody(data.report?.body ?? "");
+      const profs = data.profiles ?? [];
+      setAssignedProfiles(profs);
+      const next: Record<string, { bid: number; interview: number }> = {};
+      for (const p of profs) {
+        next[p.id] = { bid: 0, interview: 0 };
+      }
+      for (const e of data.entries ?? []) {
+        next[e.profileId] = { bid: e.bidCount, interview: e.interviewCount };
+      }
+      setCounts(next);
     } catch {
-      setReportError("Failed to load report");
-      setReportBody("");
+      setWorkError("Failed to load");
+      setAssignedProfiles([]);
+      setCounts({});
     } finally {
       setLoadPending(false);
     }
   }, []);
 
+  const refreshSummaries = useCallback(async () => {
+    try {
+      const res = await fetch("/api/me/daily-work");
+      const data = (await res.json()) as { summaries?: DateSummary[] };
+      if (res.ok && data.summaries) {
+        setSummaries(data.summaries);
+      }
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
   useEffect(() => {
-    void loadReportForDate(reportDate);
-  }, [reportDate, loadReportForDate]);
+    if (!profile.bidderId) return;
+    void loadDay(workDate);
+  }, [profile.bidderId, workDate, loadDay]);
 
   async function onPasswordSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -108,33 +149,42 @@ export function MePageClient({
     }
   }
 
-  async function onReportSubmit(e: React.FormEvent) {
+  async function onWorkSubmit(e: React.FormEvent) {
     e.preventDefault();
-    setReportMessage(null);
-    setReportError(null);
-    setReportPending(true);
+    if (!profile.bidderId) return;
+    setWorkMessage(null);
+    setWorkError(null);
+    setWorkPending(true);
     try {
-      const res = await fetch("/api/me/daily-report", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ reportDate, body: reportBody }),
+      const rows = assignedProfiles.map((p) => {
+        const c = counts[p.id] ?? { bid: 0, interview: 0 };
+        return {
+          profileId: p.id,
+          bidCount: clampNonNegInt(c.bid),
+          interviewCount: clampNonNegInt(c.interview),
+        };
       });
-      const data = (await res.json()) as { report?: ReportRow; error?: string };
-      if (!res.ok) {
-        setReportError(data.error ?? "Could not save report");
+      if (rows.length === 0) {
+        setWorkError("No profiles assigned to your bidder.");
         return;
       }
-      if (data.report) {
-        setReports((prev) => {
-          const rest = prev.filter((r) => r.report_date !== data.report!.report_date);
-          return [data.report!, ...rest].sort((a, b) => (a.report_date < b.report_date ? 1 : -1));
-        });
+      const res = await fetch("/api/me/daily-work", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workDate, rows }),
+      });
+      const data = (await res.json()) as { error?: string };
+      if (!res.ok) {
+        setWorkError(data.error ?? "Could not save");
+        return;
       }
-      setReportMessage("Report saved.");
+      setWorkMessage("Saved.");
+      await refreshSummaries();
+      await loadDay(workDate);
     } catch {
-      setReportError("Could not save report");
+      setWorkError("Could not save");
     } finally {
-      setReportPending(false);
+      setWorkPending(false);
     }
   }
 
@@ -145,7 +195,7 @@ export function MePageClient({
       <PageHeader
         eyebrow="Account"
         title="Your profile"
-        description="View your details, change your password, and submit daily reports."
+        description="View your details, change your password, and log daily bids and interviews per assigned profile."
       />
 
       <Card className="border-border/80 shadow-sm">
@@ -234,63 +284,138 @@ export function MePageClient({
 
       <Card className="border-border/80 shadow-sm">
         <CardHeader>
-          <CardTitle className="text-lg">Daily report</CardTitle>
-          <CardDescription>One entry per day; saving overwrites the text for that date.</CardDescription>
+          <CardTitle className="text-lg">Daily work</CardTitle>
+          <CardDescription>
+            Enter bid count and new interviews scheduled for each profile assigned to your bidder. One row per profile
+            per day is stored in the work log.
+          </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
-          <form onSubmit={onReportSubmit} className="space-y-4">
-            {reportError ? (
-              <p className="text-sm text-destructive" role="alert">
-                {reportError}
-              </p>
-            ) : null}
-            {reportMessage ? (
-              <p className="text-sm text-primary" role="status">
-                {reportMessage}
-              </p>
-            ) : null}
-            <div className="space-y-2">
-              <Label htmlFor="report-date">Report date</Label>
-              <Input
-                id="report-date"
-                type="date"
-                value={reportDate}
-                onChange={(e) => setReportDate(e.target.value)}
-                required
-              />
-              {loadPending ? (
-                <p className="text-xs text-muted-foreground">Loading entry for this date…</p>
+          {!profile.bidderId ? (
+            <p className="text-sm text-muted-foreground">
+              No bidder record points to this login yet. Ask an administrator to set the app user on your bidder row
+              (bidders.app_user_id), or run create-user with APP_USER_BIDDER_ID.
+            </p>
+          ) : (
+            <form onSubmit={onWorkSubmit} className="space-y-4">
+              {workError ? (
+                <p className="text-sm text-destructive" role="alert">
+                  {workError}
+                </p>
               ) : null}
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="report-body">What did you work on today?</Label>
-              <textarea
-                id="report-body"
-                className="border-input bg-background ring-offset-background placeholder:text-muted-foreground focus-visible:ring-ring flex min-h-[140px] w-full rounded-md border px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-                value={reportBody}
-                onChange={(e) => setReportBody(e.target.value)}
-                placeholder="Summarize progress, blockers, and next steps."
-                required
-              />
-            </div>
-            <Button type="submit" disabled={reportPending || loadPending}>
-              {reportPending ? "Saving…" : "Save report"}
-            </Button>
-          </form>
+              {workMessage ? (
+                <p className="text-sm text-primary" role="status">
+                  {workMessage}
+                </p>
+              ) : null}
+              <div className="space-y-2">
+                <Label htmlFor="work-date">Work date</Label>
+                <Input
+                  id="work-date"
+                  type="date"
+                  value={workDate}
+                  onChange={(e) => setWorkDate(e.target.value)}
+                  required
+                />
+                {loadPending ? (
+                  <p className="text-xs text-muted-foreground">Loading profiles and counts…</p>
+                ) : null}
+              </div>
 
-          {reports.length > 0 ? (
+              {assignedProfiles.length === 0 && !loadPending ? (
+                <p className="text-sm text-muted-foreground">
+                  No profiles are assigned to your bidder. Add profiles in the Profiles area and link them to your
+                  bidder.
+                </p>
+              ) : (
+                <div className="space-y-4">
+                  {assignedProfiles.map((p) => {
+                    const c = counts[p.id] ?? { bid: 0, interview: 0 };
+                    return (
+                      <div
+                        key={p.id}
+                        className="rounded-lg border border-border/70 bg-muted/15 px-3 py-3 sm:grid sm:grid-cols-[1fr_auto_auto] sm:items-end sm:gap-3"
+                      >
+                        <p className="mb-2 text-sm font-medium text-foreground sm:mb-0">{p.name}</p>
+                        <div className="space-y-1.5">
+                          <Label className="text-xs" htmlFor={`bid-${p.id}`}>
+                            Bids
+                          </Label>
+                          <Input
+                            id={`bid-${p.id}`}
+                            type="number"
+                            min={0}
+                            max={1_000_000}
+                            step={1}
+                            value={c.bid}
+                            onChange={(e) =>
+                              setCounts((prev) => ({
+                                ...prev,
+                                [p.id]: {
+                                  ...c,
+                                  bid: clampNonNegInt(Number.parseInt(e.target.value, 10) || 0),
+                                },
+                              }))
+                            }
+                            disabled={loadPending || workPending}
+                          />
+                        </div>
+                        <div className="mt-3 space-y-1.5 sm:mt-0">
+                          <Label className="text-xs" htmlFor={`int-${p.id}`}>
+                            Interviews
+                          </Label>
+                          <Input
+                            id={`int-${p.id}`}
+                            type="number"
+                            min={0}
+                            max={1_000_000}
+                            step={1}
+                            value={c.interview}
+                            onChange={(e) =>
+                              setCounts((prev) => ({
+                                ...prev,
+                                [p.id]: {
+                                  ...c,
+                                  interview: clampNonNegInt(Number.parseInt(e.target.value, 10) || 0),
+                                },
+                              }))
+                            }
+                            disabled={loadPending || workPending}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {assignedProfiles.length > 0 ? (
+                <Button type="submit" disabled={workPending || loadPending}>
+                  {workPending ? "Saving…" : "Save daily work"}
+                </Button>
+              ) : null}
+            </form>
+          )}
+
+          {profile.bidderId && summaries.length > 0 ? (
             <div className="border-t border-border/70 pt-6">
-              <h3 className="mb-3 text-sm font-medium text-muted-foreground">Recent reports</h3>
-              <ul className="space-y-3">
-                {reports.slice(0, 14).map((r) => (
+              <h3 className="mb-3 text-sm font-medium text-muted-foreground">Recent days (totals)</h3>
+              <ul className="space-y-2">
+                {summaries.slice(0, 14).map((s) => (
                   <li
-                    key={r.id}
-                    className="rounded-lg border border-border/60 bg-muted/20 px-3 py-2 text-sm"
+                    key={s.workDate}
+                    className="flex flex-wrap items-baseline justify-between gap-2 rounded-lg border border-border/60 bg-muted/20 px-3 py-2 text-sm"
                   >
-                    <p className="font-medium text-foreground">{r.report_date}</p>
-                    <p className="mt-1 line-clamp-3 whitespace-pre-wrap text-muted-foreground">
-                      {r.body}
-                    </p>
+                    <button
+                      type="button"
+                      className="font-medium text-foreground underline-offset-4 hover:underline"
+                      onClick={() => setWorkDate(s.workDate)}
+                    >
+                      {s.workDate}
+                    </button>
+                    <span className="tabular-nums text-muted-foreground">
+                      {s.bidCount.toLocaleString()} bids · {s.interviewCount.toLocaleString()} interviews
+                    </span>
                   </li>
                 ))}
               </ul>

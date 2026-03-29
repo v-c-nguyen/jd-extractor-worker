@@ -14,6 +14,8 @@ export type Bidder = {
   status: string;
   role: string;
   note: string;
+  /** Set on the bidder row (bidders.app_user_id); that user signs in as this bidder. */
+  appUserId: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -21,6 +23,8 @@ export type Bidder = {
 export type BidderWorkEntry = {
   id: string;
   bidderId: string;
+  profileId: string;
+  profileName: string;
   workDate: string;
   bidCount: number;
   interviewCount: number;

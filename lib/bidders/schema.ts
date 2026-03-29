@@ -37,6 +37,7 @@ export const patchBidderSchema = z
     status: z.string().trim().min(1).max(100).optional(),
     role: z.string().trim().min(1).max(200).optional(),
     note: z.string().trim().max(10000).optional(),
+    appUserId: z.union([z.string().uuid(), z.null()]).optional(),
   })
   .refine((o) => Object.keys(o).length > 0, { message: "At least one field is required" });
 

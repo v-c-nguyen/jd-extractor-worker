@@ -12,17 +12,23 @@ const uuidParam = z.string().uuid();
 
 function isUniqueViolation(err: unknown): boolean {
   const e = err as { code?: string; message?: string };
-  return e.code === "23505" || (typeof e.message === "string" && e.message.includes("uq_bidder_work_day"));
+  return (
+    e.code === "23505" ||
+    (typeof e.message === "string" &&
+      (e.message.includes("uq_bidder_work_day") || e.message.includes("uq_bidder_work_profile_day")))
+  );
 }
 
 const WORK_SCHEMA_HINT =
-  "Run db/migrations/002_bidder_work.sql and db/migrations/003_bidder_work_counts.sql on your database.";
+  "Run db/migrations through 008_bidder_work_per_profile.sql (002, 003, 007 profiles, 008).";
 
 function isWorkSchemaError(msg: string): boolean {
   if (msg.includes("bidder_work_entries") && msg.includes("does not exist")) return true;
   if (msg.includes("relation") && msg.includes("bidder_work_entries") && msg.includes("does not exist")) return true;
   if (msg.includes("bid_count") && msg.includes("does not exist")) return true;
   if (msg.includes("interview_count") && msg.includes("does not exist")) return true;
+  if (msg.includes("profile_id") && msg.includes("does not exist")) return true;
+  if (msg.includes("column") && msg.includes("profile_id")) return true;
   return false;
 }
 
@@ -64,7 +70,7 @@ export async function PATCH(
       return NextResponse.json(entry);
     } catch (e) {
       if (isUniqueViolation(e)) {
-        return jsonError("Another entry already exists for that date.", 409);
+        return jsonError("Another entry already exists for this profile and date.", 409);
       }
       throw e;
     }

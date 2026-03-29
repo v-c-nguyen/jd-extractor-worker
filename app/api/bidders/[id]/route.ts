@@ -57,15 +57,33 @@ export async function PATCH(
         { status: 400 }
       );
     }
-    const bidder = await updateBidder(idOk.data, parsed.data);
-    if (!bidder) {
-      return jsonError("Bidder not found", 404);
+    try {
+      const bidder = await updateBidder(idOk.data, parsed.data);
+      if (!bidder) {
+        return jsonError("Bidder not found", 404);
+      }
+      return NextResponse.json(bidder);
+    } catch (e) {
+      const m = e instanceof Error ? e.message : String(e);
+      const code = (e as { code?: string }).code;
+      if (
+        code === "23505" ||
+        (m.includes("duplicate key") && m.includes("app_user"))
+      ) {
+        return jsonError("That app user is already linked to another bidder.", 409);
+      }
+      throw e;
     }
-    return NextResponse.json(bidder);
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Failed to update bidder";
     if (msg.includes("DATABASE_URL")) {
       return jsonError("Database is not configured (set DATABASE_URL).", 503);
+    }
+    if (msg.includes("app_user_id") && msg.includes("does not exist")) {
+      return jsonError(
+        "Database is missing bidders.app_user_id. Run db/migrations/008_bidder_work_per_profile.sql.",
+        503
+      );
     }
     console.error("[api/bidders/[id] PATCH]", err);
     return jsonError(msg, 500);

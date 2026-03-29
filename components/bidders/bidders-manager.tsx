@@ -35,6 +35,8 @@ type FormState = {
   status: string;
   role: string;
   note: string;
+  /** app_users.id UUID; empty clears link (edit only). */
+  appUserId: string;
 };
 
 function emptyForm(): FormState {
@@ -47,6 +49,7 @@ function emptyForm(): FormState {
     status: "Active",
     role: "",
     note: "",
+    appUserId: "",
   };
 }
 
@@ -63,6 +66,7 @@ function bidderToForm(b: Bidder): FormState {
     status: b.status,
     role: b.role,
     note: b.note,
+    appUserId: b.appUserId ?? "",
   };
 }
 
@@ -191,7 +195,17 @@ export function BiddersManager() {
       return;
     }
 
-    const payload = {
+    const appUserTrim = form.appUserId.trim();
+    if (appUserTrim.length > 0) {
+      const uuidOk =
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(appUserTrim);
+      if (!uuidOk) {
+        setFormError("App user ID must be a valid UUID or left empty.");
+        return;
+      }
+    }
+
+    const payload: Record<string, unknown> = {
       name: form.name.trim(),
       country: form.country.trim(),
       contacts: trimmedContacts.map((c) => ({
@@ -204,6 +218,9 @@ export function BiddersManager() {
       role: form.role.trim(),
       note: form.note.trim(),
     };
+    if (formMode === "edit") {
+      payload.appUserId = appUserTrim.length > 0 ? appUserTrim : null;
+    }
 
     setSaving(true);
     try {
@@ -443,6 +460,22 @@ export function BiddersManager() {
             />
           </div>
 
+          {formMode === "edit" ? (
+            <div className="space-y-2">
+              <Label htmlFor="bid-app-user">Sign-in account (app user id)</Label>
+              <Input
+                id="bid-app-user"
+                placeholder="UUID from app_users, or empty to unlink"
+                className="font-mono text-xs"
+                value={form.appUserId}
+                onChange={(e) => setForm((f) => ({ ...f, appUserId: e.target.value }))}
+              />
+              <p className="text-xs text-muted-foreground">
+                Links this bidder to a dashboard login for /me daily work. Each app user can link to at most one bidder.
+              </p>
+            </div>
+          ) : null}
+
           <div className="flex justify-end gap-2 pt-2">
             <Button type="button" variant="outline" onClick={closeForm} disabled={saving}>
               Cancel
@@ -515,6 +548,12 @@ export function BiddersManager() {
                   <dd className="whitespace-pre-wrap">{viewing.note}</dd>
                 </div>
               ) : null}
+              <div>
+                <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Sign-in account</dt>
+                <dd className="break-all font-mono text-xs">
+                  {viewing.appUserId ?? "—"}
+                </dd>
+              </div>
             </dl>
             <div className="mt-6 flex flex-wrap gap-2">
               <Button

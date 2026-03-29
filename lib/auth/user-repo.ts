@@ -22,22 +22,42 @@ export async function findUserWithPasswordHashByEmail(
   return rows[0] ?? null;
 }
 
+/** Bidder row whose login is this app user (bidders.app_user_id = user id), if any. */
 export async function getUserProfileById(userId: string): Promise<{
   id: string;
   email: string;
   name: string | null;
   createdAt: string;
+  bidderId: string | null;
 } | null> {
   const sql = getSql();
   const rows = (await sql`
-    SELECT id, email, name, created_at AS created_at
-    FROM app_users
-    WHERE id = ${userId}::uuid
+    SELECT
+      u.id,
+      u.email,
+      u.name,
+      u.created_at AS created_at,
+      b.id AS bidder_id
+    FROM app_users u
+    LEFT JOIN bidders b ON b.app_user_id = u.id
+    WHERE u.id = ${userId}::uuid
     LIMIT 1
-  `) as { id: string; email: string; name: string | null; created_at: string }[];
+  `) as {
+    id: string;
+    email: string;
+    name: string | null;
+    created_at: string;
+    bidder_id: string | null;
+  }[];
   const r = rows[0];
   if (!r) return null;
-  return { id: r.id, email: r.email, name: r.name, createdAt: r.created_at };
+  return {
+    id: r.id,
+    email: r.email,
+    name: r.name,
+    createdAt: r.created_at,
+    bidderId: r.bidder_id,
+  };
 }
 
 export async function updateUserPasswordHash(userId: string, passwordHash: string): Promise<void> {
@@ -47,60 +67,4 @@ export async function updateUserPasswordHash(userId: string, passwordHash: strin
     SET password_hash = ${passwordHash}, updated_at = now()
     WHERE id = ${userId}::uuid
   `;
-}
-
-export type DailyReportRow = {
-  id: string;
-  report_date: string;
-  body: string;
-  updated_at: string;
-};
-
-export async function getDailyReportForDate(
-  userId: string,
-  reportDate: string
-): Promise<DailyReportRow | null> {
-  const sql = getSql();
-  const rows = (await sql`
-    SELECT id, report_date::text AS report_date, body, updated_at
-    FROM user_daily_reports
-    WHERE user_id = ${userId}::uuid AND report_date = ${reportDate}::date
-    LIMIT 1
-  `) as DailyReportRow[];
-  return rows[0] ?? null;
-}
-
-export async function listRecentDailyReports(
-  userId: string,
-  limit: number
-): Promise<DailyReportRow[]> {
-  const sql = getSql();
-  const safeLimit = Math.min(Math.max(limit, 1), 60);
-  return (await sql`
-    SELECT id, report_date::text AS report_date, body, updated_at
-    FROM user_daily_reports
-    WHERE user_id = ${userId}::uuid
-    ORDER BY report_date DESC
-    LIMIT ${safeLimit}
-  `) as DailyReportRow[];
-}
-
-export async function upsertDailyReport(
-  userId: string,
-  reportDate: string,
-  body: string
-): Promise<DailyReportRow> {
-  const sql = getSql();
-  const rows = (await sql`
-    INSERT INTO user_daily_reports (user_id, report_date, body)
-    VALUES (${userId}::uuid, ${reportDate}::date, ${body})
-    ON CONFLICT (user_id, report_date)
-    DO UPDATE SET body = EXCLUDED.body, updated_at = now()
-    RETURNING id, report_date::text AS report_date, body, updated_at
-  `) as DailyReportRow[];
-  const r = rows[0];
-  if (!r) {
-    throw new Error("Failed to save daily report");
-  }
-  return r;
 }

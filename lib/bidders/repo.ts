@@ -36,6 +36,7 @@ type BidderRow = {
   status: string;
   role: string;
   note: string;
+  app_user_id: string | null;
   created_at: unknown;
   updated_at: unknown;
   contacts: unknown;
@@ -54,6 +55,7 @@ function mapRow(row: BidderRow): Bidder {
     status: row.status,
     role: row.role,
     note: row.note ?? "",
+    appUserId: row.app_user_id ?? null,
     createdAt: toIso(row.created_at),
     updatedAt: toIso(row.updated_at),
   };
@@ -69,6 +71,7 @@ const listSelect = `
     b.status,
     b.role,
     b.note,
+    b.app_user_id,
     b.created_at,
     b.updated_at,
     COALESCE(
@@ -159,6 +162,8 @@ export async function updateBidder(id: string, patch: PatchBidderInput): Promise
     status: patch.status !== undefined ? patch.status : existing.status,
     role: patch.role !== undefined ? patch.role : existing.role,
     note: patch.note !== undefined ? patch.note : existing.note,
+    app_user_id:
+      patch.appUserId !== undefined ? patch.appUserId : existing.appUserId,
   };
 
   const touchBidder =
@@ -169,6 +174,7 @@ export async function updateBidder(id: string, patch: PatchBidderInput): Promise
     patch.status !== undefined ||
     patch.role !== undefined ||
     patch.note !== undefined ||
+    patch.appUserId !== undefined ||
     patch.contacts !== undefined;
 
   if (touchBidder) {
@@ -180,7 +186,8 @@ export async function updateBidder(id: string, patch: PatchBidderInput): Promise
         rate_amount = ${merged.rate_amount},
         status = ${merged.status},
         role = ${merged.role},
-        note = ${merged.note}
+        note = ${merged.note},
+        app_user_id = ${merged.app_user_id}
       WHERE id = ${id}::uuid
     `;
   }
