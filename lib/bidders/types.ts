@@ -27,3 +27,18 @@ export type BidderWorkEntry = {
   createdAt: string;
   updatedAt: string;
 };
+
+export type BidderTransactionNetwork = "BEP20" | "ERC20" | "OTHER";
+
+export type BidderTransaction = {
+  id: string;
+  bidderId: string;
+  occurredOn: string;
+  entryType: string;
+  amount: number;
+  network: BidderTransactionNetwork;
+  status: string;
+  txHash: string;
+  createdAt: string;
+  updatedAt: string;
+};

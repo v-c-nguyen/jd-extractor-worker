@@ -1,17 +1,10 @@
 import Link from "next/link";
 import { PageHeader } from "@/components/page-header";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { BiddersManager } from "@/components/bidders/bidders-manager";
 import { BidderWorkSection } from "@/components/bidders/bidder-work-section";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+import { BidderPerformanceSection } from "@/components/bidders/bidder-performance-section";
+import { BidderTransactionSection } from "@/components/bidders/bidder-transaction-section";
 import { Users, LineChart, History, Briefcase } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -20,12 +13,6 @@ const sectionNav = [
   { id: "work", label: "Work", icon: Briefcase },
   { id: "performance", label: "Performance", icon: LineChart },
   { id: "transactions", label: "Transaction history", icon: History },
-] as const;
-
-const sampleTransactions = [
-  { date: "2026-03-28", type: "Placement fee", bidder: "Acme Staffing", amount: "$4,200", status: "Paid" },
-  { date: "2026-03-26", type: "Retainer", bidder: "Northwind Talent", amount: "$1,500", status: "Pending" },
-  { date: "2026-03-22", type: "Placement fee", bidder: "Contoso Recruiting", amount: "$3,800", status: "Paid" },
 ] as const;
 
 function SectionNav() {
@@ -60,8 +47,8 @@ export default function BiddersPage() {
         title="Bidder management"
         description={
           <>
-            Maintain bidder records and per-bidder work logs in PostgreSQL. Performance and transactions
-            remain illustrative until those data sources are wired.
+            Maintain bidder records, per-bidder work logs, performance rollups, and a per-bidder transaction ledger in
+            PostgreSQL.
           </>
         }
       />
@@ -118,31 +105,15 @@ export default function BiddersPage() {
               </span>
               <div>
                 <CardTitle className="text-lg">Performance</CardTitle>
-                <CardDescription>Quality and throughput metrics per bidder over a selected period.</CardDescription>
+                <CardDescription>
+                  Per bidder: interview count, bid count, and interview rate (interviews ÷ bids × 100%) for today, this
+                  week (Mon–Sun, UTC), and this month (UTC). Below: last five weeks of combined team interview rate.
+                </CardDescription>
               </div>
             </div>
           </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              {[
-                { label: "Fill rate", value: "—", hint: "Offers accepted ÷ submissions" },
-                { label: "Time to submit", value: "—", hint: "Median hours after JD open" },
-                { label: "Interview → hire", value: "—", hint: "Conversion in last 90d" },
-                { label: "Active reqs", value: "—", hint: "Open roles with this bidder" },
-              ].map((m) => (
-                <div
-                  key={m.label}
-                  className="rounded-xl border border-border/80 bg-muted/20 p-4 shadow-sm"
-                >
-                  <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{m.label}</p>
-                  <p className="mt-2 text-2xl font-semibold tabular-nums tracking-tight">{m.value}</p>
-                  <p className="mt-1 text-xs text-muted-foreground">{m.hint}</p>
-                </div>
-              ))}
-            </div>
-            <div className="rounded-xl border border-dashed border-border/80 bg-muted/10 px-4 py-8 text-center text-sm text-muted-foreground">
-              Chart and trend views will render here when performance data is available.
-            </div>
+          <CardContent>
+            <BidderPerformanceSection />
           </CardContent>
         </Card>
       </section>
@@ -156,38 +127,14 @@ export default function BiddersPage() {
               </span>
               <div>
                 <CardTitle className="text-lg">Transaction history</CardTitle>
-                <CardDescription>Fees, retainers, and adjustments tied to bidder activity.</CardDescription>
+                <CardDescription>
+                  Per bidder: date, type, amount, token standard (BEP20, ERC20, other), status, and on-chain hash.
+                </CardDescription>
               </div>
             </div>
           </CardHeader>
           <CardContent className="space-y-4">
-            <p className="text-sm text-muted-foreground">
-              Sample layout only. Export and date-range filters can be added alongside real ledger data.
-            </p>
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Date</TableHead>
-                  <TableHead>Type</TableHead>
-                  <TableHead className="hidden md:table-cell">Bidder</TableHead>
-                  <TableHead className="text-right">Amount</TableHead>
-                  <TableHead className="hidden sm:table-cell">Status</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {sampleTransactions.map((row) => (
-                  <TableRow key={`${row.date}-${row.type}-${row.bidder}`}>
-                    <TableCell className="whitespace-nowrap tabular-nums text-muted-foreground">{row.date}</TableCell>
-                    <TableCell className="font-medium">{row.type}</TableCell>
-                    <TableCell className="hidden text-muted-foreground md:table-cell">{row.bidder}</TableCell>
-                    <TableCell className="text-right tabular-nums font-medium">{row.amount}</TableCell>
-                    <TableCell className="hidden sm:table-cell">
-                      <Badge variant={row.status === "Paid" ? "outline" : "secondary"}>{row.status}</Badge>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+            <BidderTransactionSection />
             <p className="text-center text-xs text-muted-foreground">
               Need another view?{" "}
               <Link href="/dashboard" className="font-medium text-primary underline-offset-4 hover:underline">
