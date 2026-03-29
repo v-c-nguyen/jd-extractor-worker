@@ -7,6 +7,7 @@ import {
   LayoutDashboard,
   SlidersHorizontal,
   Users,
+  ContactRound,
   CalendarClock,
   CircleUserRound,
 } from "lucide-react";
@@ -16,6 +17,7 @@ const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/job-extractor", label: "Job extractor", icon: SlidersHorizontal },
   { href: "/bidders", label: "Bidders", icon: Users },
+  { href: "/profiles", label: "Profiles", icon: ContactRound },
   { href: "/interviews", label: "Interviews", icon: CalendarClock },
   { href: "/me", label: "My account", icon: CircleUserRound },
 ] as const;

@@ -4,6 +4,7 @@ import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/ca
 import {
   SlidersHorizontal,
   Users,
+  ContactRound,
   CalendarClock,
   Briefcase,
   FileSpreadsheet,
@@ -23,6 +24,12 @@ const primaryLinks = [
     title: "Bidders",
     description: "Bidder directory, performance metrics, and transaction history.",
     icon: Users,
+  },
+  {
+    href: "/profiles",
+    title: "Profiles",
+    description: "People profiles with emails, links, and optional link to a registered bidder.",
+    icon: ContactRound,
   },
   {
     href: "/interviews",
