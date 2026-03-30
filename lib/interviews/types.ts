@@ -1,0 +1,20 @@
+export type Interview = {
+  id: string;
+  profileId: string;
+  profileName: string;
+  interviewDate: string;
+  appliedDate: string | null;
+  bookedDate: string | null;
+  interviewType: string;
+  result: string;
+  passStatus: string;
+  stage: string;
+  meetingWhere: string;
+  practiceField: string;
+  company: string;
+  resume: string;
+  jd: string;
+  note: string;
+  createdAt: string;
+  updatedAt: string;
+};
