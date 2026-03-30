@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { patchInterviewSchema } from "@/lib/interviews/schema";
+import { validateInterviewProfileReassignment } from "@/lib/interviews/profile-interview-capacity";
 import { deleteInterview, getInterviewById, updateInterview } from "@/lib/interviews/repo";
 
 function jsonError(message: string, status: number) {
@@ -56,6 +57,16 @@ export async function PATCH(
         { error: "Validation failed", details: parsed.error.flatten() },
         { status: 400 }
       );
+    }
+    const existing = await getInterviewById(idOk.data);
+    if (!existing) {
+      return jsonError("Interview not found", 404);
+    }
+    if (parsed.data.profileId !== undefined && parsed.data.profileId !== existing.profileId) {
+      const cap = await validateInterviewProfileReassignment(existing.profileId, parsed.data.profileId);
+      if (!cap.ok) {
+        return jsonError(cap.message, 400);
+      }
     }
     const interview = await updateInterview(idOk.data, parsed.data);
     if (!interview) {

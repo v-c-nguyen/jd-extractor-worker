@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { dispatchInterviewSchedulingChanged } from "@/lib/interview-scheduling-events";
 
 type AccountProfile = {
   id: string;
@@ -181,6 +182,7 @@ export function MePageClient({
       setWorkMessage("Saved.");
       await refreshSummaries();
       await loadDay(workDate);
+      dispatchInterviewSchedulingChanged();
     } catch {
       setWorkError("Could not save");
     } finally {

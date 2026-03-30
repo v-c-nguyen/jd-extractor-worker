@@ -16,6 +16,7 @@ import {
 import { cn } from "@/lib/utils";
 import type { Profile } from "@/lib/profiles/types";
 import type { Bidder } from "@/lib/bidders/types";
+import { dispatchInterviewSchedulingChanged } from "@/lib/interview-scheduling-events";
 import { Loader2, Pencil, Plus, Search, Trash2, Eye, X } from "lucide-react";
 
 const textareaClass = cn(
@@ -303,6 +304,7 @@ export function ProfilesManager() {
       }
       closeForm();
       await load();
+      dispatchInterviewSchedulingChanged();
     } catch (err) {
       setFormError(err instanceof Error ? err.message : "Save failed");
     } finally {
@@ -320,6 +322,7 @@ export function ProfilesManager() {
       }
       closeView();
       await load();
+      dispatchInterviewSchedulingChanged();
     } catch (err) {
       alert(err instanceof Error ? err.message : "Delete failed");
     }

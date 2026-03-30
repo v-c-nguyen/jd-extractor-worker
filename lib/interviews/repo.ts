@@ -106,6 +106,72 @@ export async function listInterviews(search?: string): Promise<Interview[]> {
   return rows.map((row) => mapRow(row));
 }
 
+export async function countInterviewsForProfile(profileId: string): Promise<number> {
+  const sql = getSql();
+  const rows = (await sql`
+    SELECT COUNT(*)::int AS c FROM interviews WHERE profile_id = ${profileId}::uuid
+  `) as { c: number }[];
+  return rows[0]?.c ?? 0;
+}
+
+/** Total interview counts logged in bidder_work_entries for this profile (all dates). */
+export async function sumWorkInterviewCountForProfile(profileId: string): Promise<number> {
+  const sql = getSql();
+  const rows = (await sql`
+    SELECT COALESCE(SUM(interview_count), 0)::int AS s
+    FROM bidder_work_entries
+    WHERE profile_id = ${profileId}::uuid
+  `) as { s: number }[];
+  return rows[0]?.s ?? 0;
+}
+
+export type ProfileInterviewCapacity = {
+  profileId: string;
+  profileName: string;
+  /** Target = SUM(interview_count) in bidder_work_entries for this profile. */
+  scheduledCount: number;
+  enteredCount: number;
+  remaining: number;
+};
+
+/** Per profile: work-log interview total vs interview detail rows. */
+export async function listProfileInterviewCapacities(): Promise<ProfileInterviewCapacity[]> {
+  const sql = getSql();
+  const rows = (await sql`
+    SELECT
+      p.id AS profile_id,
+      p.name AS profile_name,
+      COALESCE(ws.total, 0)::int AS scheduled_count,
+      COALESCE(ic.cnt, 0)::int AS entered_count
+    FROM profiles p
+    LEFT JOIN (
+      SELECT profile_id, SUM(interview_count)::int AS total
+      FROM bidder_work_entries
+      GROUP BY profile_id
+    ) ws ON ws.profile_id = p.id
+    LEFT JOIN (
+      SELECT profile_id, COUNT(*)::int AS cnt FROM interviews GROUP BY profile_id
+    ) ic ON ic.profile_id = p.id
+    ORDER BY lower(p.name) ASC, p.id ASC
+  `) as {
+    profile_id: string;
+    profile_name: string;
+    scheduled_count: number;
+    entered_count: number;
+  }[];
+  return rows.map((r) => {
+    const scheduled = r.scheduled_count;
+    const entered = r.entered_count;
+    return {
+      profileId: r.profile_id,
+      profileName: r.profile_name,
+      scheduledCount: scheduled,
+      enteredCount: entered,
+      remaining: Math.max(0, scheduled - entered),
+    };
+  });
+}
+
 export async function getInterviewById(id: string): Promise<Interview | null> {
   const sql = getSql();
   const rows = (await sql`

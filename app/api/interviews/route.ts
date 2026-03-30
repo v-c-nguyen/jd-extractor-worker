@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createInterviewSchema } from "@/lib/interviews/schema";
+import { validateNewInterviewForProfile } from "@/lib/interviews/profile-interview-capacity";
 import { createInterview, listInterviews } from "@/lib/interviews/repo";
 
 function jsonError(message: string, status: number) {
@@ -37,6 +38,10 @@ export async function POST(request: Request) {
         { status: 400 }
       );
     }
+    const cap = await validateNewInterviewForProfile(parsed.data.profileId);
+    if (!cap.ok) {
+      return jsonError(cap.message, 400);
+    }
     const interview = await createInterview(parsed.data);
     return NextResponse.json(interview, { status: 201 });
   } catch (err) {
@@ -46,6 +51,15 @@ export async function POST(request: Request) {
     }
     if (msg.includes("foreign key") || msg.includes("violates foreign key")) {
       return jsonError("Profile not found or invalid profile id.", 400);
+    }
+    if (
+      msg.includes("bidder_work_entries") &&
+      (msg.includes("does not exist") || msg.includes("relation"))
+    ) {
+      return jsonError(
+        "Work log table missing. Run db/migrations through 008_bidder_work_per_profile.sql.",
+        503
+      );
     }
     console.error("[api/interviews POST]", err);
     return jsonError(msg, 500);

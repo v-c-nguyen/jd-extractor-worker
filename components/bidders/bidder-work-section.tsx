@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
+import { dispatchInterviewSchedulingChanged } from "@/lib/interview-scheduling-events";
 import type { Bidder, BidderWorkEntry } from "@/lib/bidders/types";
 import { CalendarDays, ChevronLeft, ChevronRight, Loader2, Trash2 } from "lucide-react";
 
@@ -210,6 +211,7 @@ export function BidderWorkSection() {
       const data = (await res.json().catch(() => ({}))) as { error?: string };
       if (!res.ok) throw new Error(data.error ?? `Save failed (${res.status})`);
       await loadWork(bidderId);
+      dispatchInterviewSchedulingChanged();
     } catch (e) {
       setSaveError(e instanceof Error ? e.message : "Save failed");
     } finally {
@@ -229,6 +231,7 @@ export function BidderWorkSection() {
       const data = (await res.json().catch(() => ({}))) as { error?: string };
       if (!res.ok) throw new Error(data.error ?? `Delete failed (${res.status})`);
       await loadWork(bidderId);
+      dispatchInterviewSchedulingChanged();
     } catch (e) {
       setSaveError(e instanceof Error ? e.message : "Delete failed");
     } finally {

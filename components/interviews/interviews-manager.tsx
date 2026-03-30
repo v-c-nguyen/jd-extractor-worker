@@ -15,13 +15,67 @@ import {
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 import type { Interview } from "@/lib/interviews/types";
-import type { Profile } from "@/lib/profiles/types";
 import {
   interviewPassStatusValues,
   interviewResultValues,
   interviewStageValues,
 } from "@/lib/interviews/schema";
+import { dispatchInterviewSchedulingChanged } from "@/lib/interview-scheduling-events";
 import { Loader2, Pencil, Plus, Search, Trash2, Eye, X } from "lucide-react";
+
+type ProfileInterviewCapacity = {
+  profileId: string;
+  profileName: string;
+  scheduledCount: number;
+  enteredCount: number;
+  remaining: number;
+};
+
+function profileOptionsForForm(
+  mode: "create" | "edit" | null,
+  formProfileId: string,
+  capacities: ProfileInterviewCapacity[]
+): ProfileInterviewCapacity[] {
+  if (mode === "create") {
+    return capacities.filter((p) => p.scheduledCount > 0 && p.remaining > 0);
+  }
+  if (mode === "edit") {
+    return capacities.filter(
+      (p) => p.profileId === formProfileId || (p.scheduledCount > 0 && p.remaining > 0)
+    );
+  }
+  return [];
+}
+
+function mergedProfileOptions(
+  mode: "create" | "edit" | null,
+  formProfileId: string,
+  formProfileFallbackName: string | null,
+  capacities: ProfileInterviewCapacity[]
+): ProfileInterviewCapacity[] {
+  const base = profileOptionsForForm(mode, formProfileId, capacities);
+  if (mode === "edit" && formProfileId.trim() && !base.some((o) => o.profileId === formProfileId)) {
+    const name = formProfileFallbackName?.trim() || "Profile";
+    return [
+      {
+        profileId: formProfileId,
+        profileName: name,
+        scheduledCount: 0,
+        enteredCount: 0,
+        remaining: 0,
+      },
+      ...base,
+    ];
+  }
+  return base;
+}
+
+function formatProfileOptionLabel(p: ProfileInterviewCapacity): string {
+  if (p.scheduledCount > 0) {
+    return `${p.profileName} (${p.enteredCount}/${p.scheduledCount} details vs work log${p.remaining > 0 ? `, ${p.remaining} to add` : ""})`;
+  }
+  return `${p.profileName} (no work-log interview total)`;
+}
 
 const textareaClass = cn(
   "flex min-h-[88px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-base shadow-sm transition-colors",
@@ -101,9 +155,9 @@ type FormState = {
 function emptyForm(): FormState {
   return {
     profileId: "",
-    interviewDate: "",
+    interviewDate: todayYmd(),
     appliedDate: "",
-    bookedDate: todayYmd(),
+    bookedDate: "",
     typePreset: INTERVIEW_TYPE_OPTIONS[0],
     typeOther: "",
     result: interviewResultValues[0],
@@ -169,7 +223,8 @@ function buildPayload(form: FormState): Record<string, unknown> {
 
 export function InterviewsManager() {
   const [interviews, setInterviews] = useState<Interview[]>([]);
-  const [profiles, setProfiles] = useState<Profile[]>([]);
+  const [profileCapacities, setProfileCapacities] = useState<ProfileInterviewCapacity[]>([]);
+  const [canCreateInterview, setCanCreateInterview] = useState(false);
   const [loading, setLoading] = useState(true);
   const [listError, setListError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
@@ -177,6 +232,7 @@ export function InterviewsManager() {
 
   const [formMode, setFormMode] = useState<"create" | "edit" | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingProfileName, setEditingProfileName] = useState<string | null>(null);
   const [form, setForm] = useState<FormState>(emptyForm);
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -186,41 +242,42 @@ export function InterviewsManager() {
   const formRef = useRef<HTMLDialogElement>(null);
   const viewRef = useRef<HTMLDialogElement>(null);
 
-  const loadProfiles = useCallback(async () => {
-    try {
-      const res = await fetch("/api/profiles");
-      const data = (await res.json().catch(() => ({}))) as { profiles?: Profile[] };
-      if (res.ok) {
-        setProfiles(data.profiles ?? []);
-      }
-    } catch {
-      /* form still usable if list fails */
-    }
-  }, []);
-
   const load = useCallback(async () => {
     setLoading(true);
     setListError(null);
     try {
       const u = new URL("/api/interviews", window.location.origin);
       if (debouncedSearch.trim()) u.searchParams.set("q", debouncedSearch.trim());
-      const res = await fetch(u.toString());
-      const data = (await res.json().catch(() => ({}))) as { interviews?: Interview[]; error?: string };
-      if (!res.ok) {
-        throw new Error(data.error ?? `Request failed (${res.status})`);
+      const [intRes, capRes] = await Promise.all([
+        fetch(u.toString()),
+        fetch("/api/interviews/scheduling-status"),
+      ]);
+      const intData = (await intRes.json().catch(() => ({}))) as { interviews?: Interview[]; error?: string };
+      if (!intRes.ok) {
+        throw new Error(intData.error ?? `Request failed (${intRes.status})`);
       }
-      setInterviews(data.interviews ?? []);
+      setInterviews(intData.interviews ?? []);
+
+      const capData = (await capRes.json().catch(() => ({}))) as {
+        profileCapacities?: ProfileInterviewCapacity[];
+        canCreateInterview?: boolean;
+      };
+      if (capRes.ok) {
+        setProfileCapacities(capData.profileCapacities ?? []);
+        setCanCreateInterview(Boolean(capData.canCreateInterview));
+      } else {
+        setProfileCapacities([]);
+        setCanCreateInterview(false);
+      }
     } catch (e) {
       setListError(e instanceof Error ? e.message : "Failed to load interviews");
       setInterviews([]);
+      setProfileCapacities([]);
+      setCanCreateInterview(false);
     } finally {
       setLoading(false);
     }
   }, [debouncedSearch]);
-
-  useEffect(() => {
-    void loadProfiles();
-  }, [loadProfiles]);
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(search), 300);
@@ -231,10 +288,24 @@ export function InterviewsManager() {
     void load();
   }, [load]);
 
+  const profileSelectOptions = mergedProfileOptions(
+    formMode,
+    form.profileId,
+    editingProfileName,
+    profileCapacities
+  );
+
   function openCreate() {
+    if (!canCreateInterview) return;
     setFormMode("create");
     setEditingId(null);
-    setForm(emptyForm());
+    setEditingProfileName(null);
+    const next = emptyForm();
+    const eligible = profileOptionsForForm("create", "", profileCapacities);
+    if (eligible.length === 1 && eligible[0]) {
+      next.profileId = eligible[0].profileId;
+    }
+    setForm(next);
     setFormError(null);
     formRef.current?.showModal();
   }
@@ -242,6 +313,7 @@ export function InterviewsManager() {
   function openEdit(i: Interview) {
     setFormMode("edit");
     setEditingId(i.id);
+    setEditingProfileName(i.profileName);
     setForm(interviewToForm(i));
     setFormError(null);
     formRef.current?.showModal();
@@ -256,6 +328,7 @@ export function InterviewsManager() {
     formRef.current?.close();
     setFormMode(null);
     setEditingId(null);
+    setEditingProfileName(null);
     setFormError(null);
   }
 
@@ -270,6 +343,10 @@ export function InterviewsManager() {
 
     if (!form.profileId.trim()) {
       setFormError("Select a profile.");
+      return;
+    }
+    if (!form.interviewDate.trim()) {
+      setFormError("Choose an interview date.");
       return;
     }
 
@@ -312,6 +389,7 @@ export function InterviewsManager() {
       }
       closeForm();
       await load();
+      dispatchInterviewSchedulingChanged();
     } catch (err) {
       setFormError(err instanceof Error ? err.message : "Save failed");
     } finally {
@@ -330,6 +408,7 @@ export function InterviewsManager() {
       }
       closeView();
       await load();
+      dispatchInterviewSchedulingChanged();
     } catch (err) {
       alert(err instanceof Error ? err.message : "Delete failed");
     }
@@ -358,10 +437,27 @@ export function InterviewsManager() {
             aria-label="Search interviews"
           />
         </div>
-        <Button type="button" onClick={openCreate} className="shrink-0 gap-2">
-          <Plus className="h-4 w-4" aria-hidden />
-          Add interview
-        </Button>
+        <div className="flex shrink-0 flex-col items-stretch gap-1 sm:items-end">
+          <Button
+            type="button"
+            onClick={openCreate}
+            disabled={!canCreateInterview || loading}
+            className="gap-2"
+            title={
+              canCreateInterview
+                ? "Add an interview detail row for a profile that is still short of its work-log total"
+                : "Every profile with a work-log interview total has enough interview details, or no totals are logged yet."
+            }
+          >
+            <Plus className="h-4 w-4" aria-hidden />
+            Add interview
+          </Button>
+          {!canCreateInterview && !loading ? (
+            <p className="max-w-xs text-right text-xs text-muted-foreground">
+              Add interview counts in the daily work log first; then you can add matching rows here until counts match.
+            </p>
+          ) : null}
+        </div>
       </div>
 
       <div className="rounded-md border border-border/80">
@@ -439,7 +535,14 @@ export function InterviewsManager() {
         </Table>
       </div>
 
-      <dialog ref={formRef} className={dialogClass} onClose={() => setFormMode(null)}>
+      <dialog
+        ref={formRef}
+        className={dialogClass}
+        onClose={() => {
+          setFormMode(null);
+          setEditingProfileName(null);
+        }}
+      >
         <div className="mb-4 flex items-start justify-between gap-4">
           <h2 className="text-lg font-semibold">{formMode === "edit" ? "Edit interview" : "New interview"}</h2>
           <Button type="button" variant="ghost" size="icon" onClick={closeForm} aria-label="Close">
@@ -460,14 +563,24 @@ export function InterviewsManager() {
                 onChange={(e) => setForm((f) => ({ ...f, profileId: e.target.value }))}
               >
                 <option value="">Select a profile…</option>
-                {profiles.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
+                {profileSelectOptions.map((p) => (
+                  <option key={p.profileId} value={p.profileId}>
+                    {formatProfileOptionLabel(p)}
                   </option>
                 ))}
               </select>
-              {profiles.length === 0 ? (
-                <p className="text-xs text-muted-foreground">Add profiles first under Profiles.</p>
+              {formMode === "create" && profileCapacities.length === 0 ? (
+                <p className="text-xs text-muted-foreground">
+                  Could not load capacity data. Ensure migrations through{" "}
+                  <code className="rounded bg-muted px-1">008_bidder_work_per_profile.sql</code> and{" "}
+                  <code className="rounded bg-muted px-1">010_interviews.sql</code> are applied.
+                </p>
+              ) : null}
+              {formMode === "create" && profileCapacities.length > 0 && profileSelectOptions.length === 0 ? (
+                <p className="text-xs text-muted-foreground">
+                  No spare slots: log a higher interview total in the daily work log for a profile, or finish entering
+                  existing interview details first.
+                </p>
               ) : null}
             </div>
 
