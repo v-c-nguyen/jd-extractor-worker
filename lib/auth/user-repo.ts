@@ -9,6 +9,23 @@ export type AppUserRow = {
   updated_at: string;
 };
 
+/** Inserts a login row for dashboard auth. Email should be normalized (e.g. lowercased). */
+export async function insertAppUser(params: {
+  email: string;
+  passwordHash: string;
+  name: string | null;
+}): Promise<string> {
+  const sql = getSql();
+  const rows = (await sql`
+    INSERT INTO app_users (email, password_hash, name)
+    VALUES (${params.email}, ${params.passwordHash}, ${params.name})
+    RETURNING id
+  `) as { id: string }[];
+  const id = rows[0]?.id;
+  if (!id) throw new Error("Insert returned no app user id");
+  return id;
+}
+
 export async function findUserWithPasswordHashByEmail(
   emailLower: string
 ): Promise<AppUserRow | null> {

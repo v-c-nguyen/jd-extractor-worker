@@ -7,6 +7,8 @@ const contactInput = z.object({
 
 export const createBidderSchema = z.object({
   name: z.string().trim().min(1).max(500),
+  /** Login email for app_users (dashboard /me). Initial password is set server-side. */
+  loginEmail: z.string().trim().email().transform((s) => s.toLowerCase()),
   country: z.string().trim().min(1).max(200),
   contacts: z.array(contactInput).min(1),
   rateCurrency: z

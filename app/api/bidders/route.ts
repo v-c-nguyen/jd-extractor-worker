@@ -44,6 +44,9 @@ export async function POST(request: Request) {
     if (msg.includes("DATABASE_URL")) {
       return jsonError("Database is not configured (set DATABASE_URL).", 503);
     }
+    if (/duplicate key|unique constraint|23505/i.test(msg)) {
+      return jsonError("A dashboard user with this email already exists.", 409);
+    }
     console.error("[api/bidders POST]", err);
     return jsonError(msg, 500);
   }

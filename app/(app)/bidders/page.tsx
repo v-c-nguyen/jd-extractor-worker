@@ -44,7 +44,7 @@ export default function BiddersPage() {
     <div className="mx-auto max-w-5xl space-y-8">
       <PageHeader
         eyebrow="Operations"
-        title="Bidder management"
+        title="Bidders"
         description={
           <>
             Maintain bidder records, per-bidder work logs, performance rollups, and a per-bidder transaction ledger in

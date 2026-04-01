@@ -1,6 +1,11 @@
+import { hashPassword } from "@/lib/auth/password";
+import { insertAppUser } from "@/lib/auth/user-repo";
 import { getSql } from "@/lib/db/neon-sql";
 import type { Bidder, BidderContact } from "@/lib/bidders/types";
 import type { CreateBidderInput, PatchBidderInput } from "@/lib/bidders/schema";
+
+/** Initial login password for new bidder accounts; users change it from profile. */
+const DEFAULT_NEW_BIDDER_LOGIN_PASSWORD = "123!@#qweQWE";
 
 function mapContacts(raw: unknown): BidderContact[] {
   if (!Array.isArray(raw)) return [];
@@ -115,36 +120,51 @@ export async function getBidderById(id: string): Promise<Bidder | null> {
 
 export async function createBidder(input: CreateBidderInput): Promise<Bidder> {
   const sql = getSql();
-  const inserted = (await sql`
-    INSERT INTO bidders (name, country, rate_currency, rate_amount, status, role, note)
-    VALUES (
-      ${input.name},
-      ${input.country},
-      ${input.rateCurrency},
-      ${input.rateAmount},
-      ${input.status},
-      ${input.role},
-      ${input.note ?? ""}
-    )
-    RETURNING id
-  `) as { id: string }[];
-  const row0 = inserted[0];
-  if (!row0) throw new Error("Insert returned no row");
-  const newId = row0.id;
+  const passwordHash = await hashPassword(DEFAULT_NEW_BIDDER_LOGIN_PASSWORD);
+  const displayName = input.name.trim();
+  let appUserId: string | null = null;
+  let newBidderId: string | null = null;
   try {
+    appUserId = await insertAppUser({
+      email: input.loginEmail,
+      passwordHash,
+      name: displayName,
+    });
+    const inserted = (await sql`
+      INSERT INTO bidders (name, country, rate_currency, rate_amount, status, role, note, app_user_id)
+      VALUES (
+        ${input.name},
+        ${input.country},
+        ${input.rateCurrency},
+        ${input.rateAmount},
+        ${input.status},
+        ${input.role},
+        ${input.note ?? ""},
+        ${appUserId}::uuid
+      )
+      RETURNING id
+    `) as { id: string }[];
+    const row0 = inserted[0];
+    if (!row0) throw new Error("Insert returned no row");
+    newBidderId = row0.id;
     for (let i = 0; i < input.contacts.length; i++) {
       const c = input.contacts[i];
       if (!c) continue;
       await sql`
         INSERT INTO bidder_contacts (bidder_id, label, value, sort_order)
-        VALUES (${newId}, ${c.label?.trim() ?? ""}, ${c.value}, ${i})
+        VALUES (${newBidderId}, ${c.label?.trim() ?? ""}, ${c.value}, ${i})
       `;
     }
   } catch (e) {
-    await sql`DELETE FROM bidders WHERE id = ${newId}`;
+    if (newBidderId) {
+      await sql`DELETE FROM bidders WHERE id = ${newBidderId}::uuid`;
+    }
+    if (appUserId) {
+      await sql`DELETE FROM app_users WHERE id = ${appUserId}::uuid`;
+    }
     throw e;
   }
-  const created = await getBidderById(newId);
+  const created = await getBidderById(newBidderId);
   if (!created) throw new Error("Failed to load bidder after create");
   return created;
 }

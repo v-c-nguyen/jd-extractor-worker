@@ -26,8 +26,57 @@ const textareaClass = cn(
 const dialogClass =
   "w-[min(100%,32rem)] max-h-[90vh] overflow-y-auto rounded-xl border border-border bg-card p-6 shadow-lg backdrop:bg-black/50";
 
+const BIDDER_STATUS_OPTIONS = ["Active", "Pending", "Inactive"] as const;
+const BIDDER_ROLE_OPTIONS = ["Bidder", "Manager", "Administrator"] as const;
+
+const selectClass = cn(
+  "flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-base shadow-sm transition-colors",
+  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+  "disabled:cursor-not-allowed disabled:opacity-50 md:text-sm"
+);
+
+function normalizeBidderStatus(raw: string): string {
+  const t = raw.trim();
+  const hit = BIDDER_STATUS_OPTIONS.find((o) => o.toLowerCase() === t.toLowerCase());
+  return hit ?? raw.trim();
+}
+
+function normalizeBidderRole(raw: string): string {
+  const t = raw.trim();
+  const hit = BIDDER_ROLE_OPTIONS.find((o) => o.toLowerCase() === t.toLowerCase());
+  return hit ?? raw.trim();
+}
+
+/** Keeps a contact row with label "Email" in sync with the sign-in email field (create flow). */
+function applyLoginEmailToContacts(
+  contacts: { label: string; value: string }[],
+  loginEmailRaw: string
+): { label: string; value: string }[] {
+  const email = loginEmailRaw.trim();
+  const emailIdx = contacts.findIndex((c) => c.label.trim().toLowerCase() === "email");
+
+  if (email) {
+    if (emailIdx >= 0) {
+      return contacts.map((c, i) => (i === emailIdx ? { label: "Email", value: email } : c));
+    }
+    const emptyIdx = contacts.findIndex((c) => !c.label.trim() && !c.value.trim());
+    if (emptyIdx >= 0) {
+      return contacts.map((c, i) => (i === emptyIdx ? { label: "Email", value: email } : c));
+    }
+    return [{ label: "Email", value: email }, ...contacts];
+  }
+
+  if (emailIdx >= 0) {
+    const rest = contacts.filter((_, i) => i !== emailIdx);
+    return rest.length > 0 ? rest : [{ label: "", value: "" }];
+  }
+  return contacts;
+}
+
 type FormState = {
   name: string;
+  /** Create only: login email for app_users. */
+  loginEmail: string;
   country: string;
   contacts: { label: string; value: string }[];
   rateCurrency: string;
@@ -42,12 +91,13 @@ type FormState = {
 function emptyForm(): FormState {
   return {
     name: "",
+    loginEmail: "",
     country: "",
     contacts: [{ label: "", value: "" }],
     rateCurrency: "USD",
     rateAmount: "0",
     status: "Active",
-    role: "",
+    role: "Bidder",
     note: "",
     appUserId: "",
   };
@@ -56,6 +106,7 @@ function emptyForm(): FormState {
 function bidderToForm(b: Bidder): FormState {
   return {
     name: b.name,
+    loginEmail: "",
     country: b.country,
     contacts:
       b.contacts.length > 0
@@ -63,8 +114,8 @@ function bidderToForm(b: Bidder): FormState {
         : [{ label: "", value: "" }],
     rateCurrency: b.rate.currency,
     rateAmount: String(b.rate.amount),
-    status: b.status,
-    role: b.role,
+    status: normalizeBidderStatus(b.status),
+    role: normalizeBidderRole(b.role),
     note: b.note,
     appUserId: b.appUserId ?? "",
   };
@@ -178,7 +229,9 @@ export function BiddersManager() {
   async function submitForm(e: React.FormEvent) {
     e.preventDefault();
     setFormError(null);
-    const trimmedContacts = form.contacts
+    const contactsSource =
+      formMode === "create" ? applyLoginEmailToContacts(form.contacts, form.loginEmail) : form.contacts;
+    const trimmedContacts = contactsSource
       .map((c) => ({ label: c.label.trim(), value: c.value.trim() }))
       .filter((c) => c.value.length > 0);
     if (trimmedContacts.length === 0) {
@@ -205,6 +258,19 @@ export function BiddersManager() {
       }
     }
 
+    if (formMode === "create") {
+      const emailTrim = form.loginEmail.trim();
+      if (!emailTrim) {
+        setFormError("Sign-in email is required.");
+        return;
+      }
+      const basicEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!basicEmail.test(emailTrim)) {
+        setFormError("Enter a valid sign-in email.");
+        return;
+      }
+    }
+
     const payload: Record<string, unknown> = {
       name: form.name.trim(),
       country: form.country.trim(),
@@ -220,6 +286,9 @@ export function BiddersManager() {
     };
     if (formMode === "edit") {
       payload.appUserId = appUserTrim.length > 0 ? appUserTrim : null;
+    }
+    if (formMode === "create") {
+      payload.loginEmail = form.loginEmail.trim();
     }
 
     setSaving(true);
@@ -373,17 +442,74 @@ export function BiddersManager() {
               <Label htmlFor="bid-name">Name</Label>
               <Input id="bid-name" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} required />
             </div>
+            {formMode === "create" ? (
+              <>
+                <div className="space-y-2 sm:col-span-2">
+                  <Label htmlFor="bid-login-email">Sign-in email</Label>
+                  <Input
+                    id="bid-login-email"
+                    type="email"
+                    autoComplete="email"
+                    value={form.loginEmail}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setForm((f) => ({
+                        ...f,
+                        loginEmail: v,
+                        contacts: applyLoginEmailToContacts(f.contacts, v),
+                      }));
+                    }}
+                    required
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Creates a dashboard login (app_users) and links this bidder to it. The same address is added under
+                    contacts as Email. A default password is set; they can change it in profile after signing in.
+                  </p>
+                </div>
+              </>
+            ) : null}
             <div className="space-y-2">
               <Label htmlFor="bid-country">Country</Label>
               <Input id="bid-country" value={form.country} onChange={(e) => setForm((f) => ({ ...f, country: e.target.value }))} required />
             </div>
             <div className="space-y-2">
               <Label htmlFor="bid-status">Status</Label>
-              <Input id="bid-status" value={form.status} onChange={(e) => setForm((f) => ({ ...f, status: e.target.value }))} required />
+              <select
+                id="bid-status"
+                className={selectClass}
+                value={form.status}
+                onChange={(e) => setForm((f) => ({ ...f, status: e.target.value }))}
+                required
+              >
+                {!BIDDER_STATUS_OPTIONS.includes(form.status as (typeof BIDDER_STATUS_OPTIONS)[number]) &&
+                form.status.trim() ? (
+                  <option value={form.status}>{form.status}</option>
+                ) : null}
+                {BIDDER_STATUS_OPTIONS.map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
+              </select>
             </div>
             <div className="space-y-2 sm:col-span-2">
               <Label htmlFor="bid-role">Role</Label>
-              <Input id="bid-role" value={form.role} onChange={(e) => setForm((f) => ({ ...f, role: e.target.value }))} required />
+              <select
+                id="bid-role"
+                className={selectClass}
+                value={form.role}
+                onChange={(e) => setForm((f) => ({ ...f, role: e.target.value }))}
+                required
+              >
+                {!BIDDER_ROLE_OPTIONS.includes(form.role as (typeof BIDDER_ROLE_OPTIONS)[number]) && form.role.trim() ? (
+                  <option value={form.role}>{form.role}</option>
+                ) : null}
+                {BIDDER_ROLE_OPTIONS.map((r) => (
+                  <option key={r} value={r}>
+                    {r}
+                  </option>
+                ))}
+              </select>
             </div>
             <div className="space-y-2">
               <Label htmlFor="bid-currency">Rate currency</Label>
