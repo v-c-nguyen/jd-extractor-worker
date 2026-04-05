@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { listProfileInterviewCapacities } from "@/lib/interviews/repo";
+import { listProfileInterviewCapacities, listStaleBookedInterviewSummaries } from "@/lib/interviews/repo";
+import { listOpenInterviewSlots } from "@/lib/interviews/scheduling-slots";
 
 function jsonError(message: string, status: number) {
   return NextResponse.json({ error: message }, { status });
@@ -7,10 +8,18 @@ function jsonError(message: string, status: number) {
 
 export async function GET() {
   try {
-    const profileCapacities = await listProfileInterviewCapacities();
-    const gaps = profileCapacities.filter((p) => p.scheduledCount > p.enteredCount);
-    const canCreateInterview = gaps.length > 0;
-    return NextResponse.json({ gaps, canCreateInterview, profileCapacities });
+    const [profileCapacities, openSlots, staleBookedInterviews] = await Promise.all([
+      listProfileInterviewCapacities(),
+      listOpenInterviewSlots(),
+      listStaleBookedInterviewSummaries(),
+    ]);
+    const canCreateInterview = openSlots.length > 0;
+    return NextResponse.json({
+      openSlots,
+      staleBookedInterviews,
+      canCreateInterview,
+      profileCapacities,
+    });
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Failed to load scheduling status";
     if (msg.includes("DATABASE_URL")) {

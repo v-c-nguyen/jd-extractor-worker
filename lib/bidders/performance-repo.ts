@@ -1,5 +1,10 @@
 import { getSql } from "@/lib/db/neon-sql";
-import type { BidderPerformanceRow, PeriodPerformance, WeeklyTeamRatePoint } from "@/lib/bidders/performance-types";
+import type {
+  BidderPerformanceRow,
+  PeriodComparisonDelta,
+  PeriodPerformance,
+  WeeklyTeamRatePoint,
+} from "@/lib/bidders/performance-types";
 
 function todayIsoUtc(): string {
   return new Date().toISOString().slice(0, 10);
@@ -34,6 +39,20 @@ function lastDayOfMonthUtc(iso: string): string {
   return new Date(Date.UTC(y, m + 1, 0)).toISOString().slice(0, 10);
 }
 
+function firstDayOfPreviousMonthUtc(iso: string): string {
+  const d = new Date(iso + "T12:00:00.000Z");
+  const y = d.getUTCFullYear();
+  const m = d.getUTCMonth();
+  return new Date(Date.UTC(y, m - 1, 1)).toISOString().slice(0, 10);
+}
+
+function lastDayOfPreviousMonthUtc(iso: string): string {
+  const d = new Date(iso + "T12:00:00.000Z");
+  const y = d.getUTCFullYear();
+  const m = d.getUTCMonth();
+  return new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
+}
+
 function interviewRatePct(bids: number, interviews: number): number | null {
   if (bids === 0) return null;
   return Math.round((interviews / bids) * 1000) / 10;
@@ -44,10 +63,16 @@ type AggRow = {
   name: string;
   bids_today: unknown;
   int_today: unknown;
+  bids_yesterday: unknown;
+  int_yesterday: unknown;
   bids_week: unknown;
   int_week: unknown;
+  bids_last_week: unknown;
+  int_last_week: unknown;
   bids_month: unknown;
   int_month: unknown;
+  bids_last_month: unknown;
+  int_last_month: unknown;
 };
 
 function mapCount(v: unknown): number {
@@ -68,6 +93,26 @@ function period(bids: number, interviews: number): PeriodPerformance {
   };
 }
 
+function roundRateDelta(a: number | null, b: number | null): number | null {
+  if (a === null || b === null) return null;
+  return Math.round((a - b) * 10) / 10;
+}
+
+function comparisonDelta(
+  curB: number,
+  curI: number,
+  prevB: number,
+  prevI: number
+): PeriodComparisonDelta {
+  const curRate = interviewRatePct(curB, curI);
+  const prevRate = interviewRatePct(prevB, prevI);
+  return {
+    interviewDelta: curI - prevI,
+    bidDelta: curB - prevB,
+    rateDeltaPctPoints: roundRateDelta(curRate, prevRate),
+  };
+}
+
 function dateOnlyFromRow(v: unknown): string {
   if (v instanceof Date) return v.toISOString().slice(0, 10);
   if (typeof v === "string") return v.slice(0, 10);
@@ -77,10 +122,15 @@ function dateOnlyFromRow(v: unknown): string {
 export async function listBidderPerformanceRows(): Promise<BidderPerformanceRow[]> {
   const sql = getSql();
   const today = todayIsoUtc();
+  const yesterday = addDaysUtc(today, -1);
   const weekStart = mondayOfWeekContainingIso(today);
   const weekEnd = addDaysUtc(weekStart, 6);
+  const lastWeekStart = addDaysUtc(weekStart, -7);
+  const lastWeekEnd = addDaysUtc(weekEnd, -7);
   const monthStart = firstDayOfMonthUtc(today);
   const monthEnd = lastDayOfMonthUtc(today);
+  const lastMonthStart = firstDayOfPreviousMonthUtc(today);
+  const lastMonthEnd = lastDayOfPreviousMonthUtc(today);
 
   const rows = (await sql`
     SELECT
@@ -88,6 +138,8 @@ export async function listBidderPerformanceRows(): Promise<BidderPerformanceRow[
       b.name,
       COALESCE(SUM(CASE WHEN w.work_date = ${today}::date THEN w.bid_count ELSE 0 END), 0) AS bids_today,
       COALESCE(SUM(CASE WHEN w.work_date = ${today}::date THEN w.interview_count ELSE 0 END), 0) AS int_today,
+      COALESCE(SUM(CASE WHEN w.work_date = ${yesterday}::date THEN w.bid_count ELSE 0 END), 0) AS bids_yesterday,
+      COALESCE(SUM(CASE WHEN w.work_date = ${yesterday}::date THEN w.interview_count ELSE 0 END), 0) AS int_yesterday,
       COALESCE(
         SUM(
           CASE
@@ -109,6 +161,24 @@ export async function listBidderPerformanceRows(): Promise<BidderPerformanceRow[
       COALESCE(
         SUM(
           CASE
+            WHEN w.work_date >= ${lastWeekStart}::date AND w.work_date <= ${lastWeekEnd}::date THEN w.bid_count
+            ELSE 0
+          END
+        ),
+        0
+      ) AS bids_last_week,
+      COALESCE(
+        SUM(
+          CASE
+            WHEN w.work_date >= ${lastWeekStart}::date AND w.work_date <= ${lastWeekEnd}::date THEN w.interview_count
+            ELSE 0
+          END
+        ),
+        0
+      ) AS int_last_week,
+      COALESCE(
+        SUM(
+          CASE
             WHEN w.work_date >= ${monthStart}::date AND w.work_date <= ${monthEnd}::date THEN w.bid_count
             ELSE 0
           END
@@ -123,7 +193,25 @@ export async function listBidderPerformanceRows(): Promise<BidderPerformanceRow[
           END
         ),
         0
-      ) AS int_month
+      ) AS int_month,
+      COALESCE(
+        SUM(
+          CASE
+            WHEN w.work_date >= ${lastMonthStart}::date AND w.work_date <= ${lastMonthEnd}::date THEN w.bid_count
+            ELSE 0
+          END
+        ),
+        0
+      ) AS bids_last_month,
+      COALESCE(
+        SUM(
+          CASE
+            WHEN w.work_date >= ${lastMonthStart}::date AND w.work_date <= ${lastMonthEnd}::date THEN w.interview_count
+            ELSE 0
+          END
+        ),
+        0
+      ) AS int_last_month
     FROM bidders b
     LEFT JOIN bidder_work_entries w ON w.bidder_id = b.id
     GROUP BY b.id, b.name
@@ -133,16 +221,25 @@ export async function listBidderPerformanceRows(): Promise<BidderPerformanceRow[
   return rows.map((r) => {
     const bt = mapCount(r.bids_today);
     const it = mapCount(r.int_today);
+    const by = mapCount(r.bids_yesterday);
+    const iy = mapCount(r.int_yesterday);
     const bw = mapCount(r.bids_week);
     const iw = mapCount(r.int_week);
+    const blw = mapCount(r.bids_last_week);
+    const ilw = mapCount(r.int_last_week);
     const bm = mapCount(r.bids_month);
     const im = mapCount(r.int_month);
+    const blm = mapCount(r.bids_last_month);
+    const ilm = mapCount(r.int_last_month);
     return {
       bidderId: r.id,
       name: r.name,
       today: period(bt, it),
       week: period(bw, iw),
       month: period(bm, im),
+      vsYesterday: comparisonDelta(bt, it, by, iy),
+      vsLastWeek: comparisonDelta(bw, iw, blw, ilw),
+      vsLastMonth: comparisonDelta(bm, im, blm, ilm),
     };
   });
 }

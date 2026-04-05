@@ -30,6 +30,7 @@ var NJ_HEADER_ROWS = 1;
 
 /** 1-based: column A = added-date stamp when job URL (D) is first present */
 var NJ_ADDED_DATE_COL = 1;
+var NJ_STATUS_COL_1_BASED = NJ_STATUS_COL + 1;
 
 /** 1-based sheet columns C–F: sync on manual edit of status/URL/company/type */
 var NJ_EDIT_COL_MIN = 3;
@@ -37,25 +38,35 @@ var NJ_EDIT_COL_MAX = 6;
 
 var DEDUPE_BY_COMPANY_ON_NEW_JOBS = true;
 
+/**
+ * Job types that sync to Saul, Jimmy, CSmith, and CGlynn (same pool as AI + Full Stack roles).
+ * Do NOT add DevOps or other engineering types to QA_TYPE_LABELS — CNguyen is QA-only.
+ */
 var ENGINEERING_TYPE_LABELS = [
   "AI Integration - Full Stack",
   "Applied AI & Automation",
+  "DevOps",
   "FullStack - JS",
   "FullStack - Go",
   "FullStack - Ruby",
   "FullStack - Python",
   "FullStack - C#",
   "FullStack - PHP",
+  "FullStack - Java",
 ];
 
+/** CNguyen only — strictly QA; engineering types stay in ENGINEERING_TYPE_LABELS. */
 var QA_TYPE_LABELS = ["QA"];
 
 function normalizeTypeForFilter(s) {
   return String(s || "")
     .toLowerCase()
     .trim()
+    .replace(/\u00a0/g, " ")
     .replace(/\u2013/g, "-")
-    .replace(/\u2014/g, "-");
+    .replace(/\u2014/g, "-")
+    .replace(/\s*-\s*/g, "-")
+    .replace(/\s+/g, " ");
 }
 
 function buildAllowedTypesSet(labels) {
@@ -68,6 +79,16 @@ function buildAllowedTypesSet(labels) {
 
 var ENGINEERING_TYPES_SET = buildAllowedTypesSet(ENGINEERING_TYPE_LABELS);
 var QA_TYPES_SET = buildAllowedTypesSet(QA_TYPE_LABELS);
+var ALL_ALLOWED_TYPES_SET = (function () {
+  var s = new Set();
+  ENGINEERING_TYPES_SET.forEach(function (v) {
+    s.add(v);
+  });
+  QA_TYPES_SET.forEach(function (v) {
+    s.add(v);
+  });
+  return s;
+})();
 
 var TEAM_SHEET_CONFIG = [
   {
@@ -76,7 +97,7 @@ var TEAM_SHEET_CONFIG = [
     allowUsableForSaulStatus: true,
   },
   { sheetName: "Jimmy", allowedTypes: ENGINEERING_TYPES_SET },
-  { sheetName: "CNguyen", allowedTypes: QA_TYPES_SET },
+  { sheetName: "CNguyen", allowedTypes: QA_TYPES_SET /* QA only — not AI/FullStack/DevOps */ },
   { sheetName: "CSmith", allowedTypes: ENGINEERING_TYPES_SET },
   { sheetName: "CGlynn", allowedTypes: ENGINEERING_TYPES_SET },
 ];
@@ -94,17 +115,72 @@ function getCanonicalJobUrl(richCell, plainFromValues) {
 function normalizeJobUrlForDedupe(url) {
   var s = String(url || "").trim();
   if (!s) return "";
-  s = s.toLowerCase();
-  var hashIdx = s.indexOf("#");
-  if (hashIdx >= 0) s = s.substring(0, hashIdx);
-  var qIdx = s.indexOf("?");
-  if (qIdx >= 0) s = s.substring(0, qIdx);
-  while (s.length > 1 && s.charAt(s.length - 1) === "/") {
-    s = s.substring(0, s.length - 1);
+  s = s.replace(/#.*$/, "");
+
+  // Apps Script-safe URL parsing via regex/string operations.
+  var m = s.match(/^(https?):\/\/([^\/?#]+)([^?#]*)?(\?[^#]*)?$/i);
+  if (!m) {
+    var fallback = s.toLowerCase();
+    while (fallback.length > 1 && fallback.charAt(fallback.length - 1) === "/") {
+      fallback = fallback.substring(0, fallback.length - 1);
+    }
+    if (fallback.indexOf("http://") === 0) fallback = "https://" + fallback.substring(7);
+    if (fallback.indexOf("https://www.") === 0) fallback = "https://" + fallback.substring(8);
+    return fallback;
   }
-  if (s.indexOf("http://") === 0) s = "https://" + s.substring(7);
-  if (s.indexOf("https://www.") === 0) s = "https://" + s.substring(8);
-  return s;
+
+  var protocol = "https:";
+  var host = String(m[2] || "").toLowerCase();
+  if (host.indexOf("www.") === 0) host = host.substring(4);
+  var path = String(m[3] || "");
+  if (!path) path = "/";
+  while (path.length > 1 && path.charAt(path.length - 1) === "/") {
+    path = path.substring(0, path.length - 1);
+  }
+
+  // Keep only identity-like params so different jobs don't collide
+  // (e.g. Greenhouse embed links differ in for/token/jr_id).
+  var keepParamKeys = {
+    jr_id: true,
+    token: true,
+    gh_jid: true,
+    jid: true,
+    job_id: true,
+    jobid: true,
+    req_id: true,
+    requisitionid: true,
+    for: true,
+  };
+  var keptMap = {};
+  var query = String(m[4] || "");
+  if (query.indexOf("?") === 0) query = query.substring(1);
+  if (query) {
+    var pairs = query.split("&");
+    for (var i = 0; i < pairs.length; i++) {
+      var pair = pairs[i];
+      if (!pair) continue;
+      var eq = pair.indexOf("=");
+      var rawKey = eq >= 0 ? pair.substring(0, eq) : pair;
+      var rawVal = eq >= 0 ? pair.substring(eq + 1) : "";
+      var key = decodeURIComponent(String(rawKey || "").replace(/\+/g, " "))
+        .toLowerCase()
+        .trim();
+      if (!keepParamKeys[key]) continue;
+      var val = decodeURIComponent(String(rawVal || "").replace(/\+/g, " "))
+        .toLowerCase()
+        .trim();
+      if (!val) continue;
+      keptMap[key] = val;
+    }
+  }
+
+  var kept = Object.keys(keptMap).sort();
+  var keptParts = [];
+  for (var j = 0; j < kept.length; j++) {
+    var k = kept[j];
+    keptParts.push(k + "=" + keptMap[k]);
+  }
+  return protocol + "//" + host + path + (keptParts.length ? "?" + keptParts.join("&") : "");
 }
 
 function normalizeCompanyForDedupe(raw) {
@@ -304,12 +380,19 @@ function buildDesiredFromNewJobs(srcData, srcRichUrls, allowedTypesSet, options)
     var urlKey = normalizeJobUrlForDedupe(jobUrl);
     if (!urlKey || seenUrlKeys.has(urlKey)) continue;
     var companyKey = normalizeCompanyForDedupe(row[NJ_COMPANY_COL]);
-    if (
+    var isCompanyDuplicate =
       DEDUPE_BY_COMPANY_ON_NEW_JOBS &&
       companyKey &&
-      seenCompanyKeys.has(companyKey)
-    ) {
-      continue;
+      seenCompanyKeys.has(companyKey);
+    if (isCompanyDuplicate) {
+      Logger.log(
+        "company-overlap allowed: new_jobs row " +
+          njRow +
+          ", company=" +
+          companyKey +
+          ", url=" +
+          jobUrl
+      );
     }
     seenUrlKeys.add(urlKey);
     if (companyKey) seenCompanyKeys.add(companyKey);
@@ -317,6 +400,48 @@ function buildDesiredFromNewJobs(srcData, srcRichUrls, allowedTypesSet, options)
     orderedNjRows.push(njRow);
   }
   return { desired: desired, orderedNjRows: orderedNjRows };
+}
+
+/**
+ * Mark duplicate candidates in new_jobs status column so overlap reason is visible.
+ * Only rows with usable/usable_for_saul + valid type + URL are considered.
+ */
+function markOverlappedStatusesOnNewJobs(sourceSheet, srcData, srcRichUrls) {
+  var seenCompanyKeys = new Set();
+  var updates = [];
+
+  for (var i = NJ_HEADER_ROWS; i < srcData.length; i++) {
+    var row = srcData[i];
+    var rowNum = i + 1;
+    var status = String(row[NJ_STATUS_COL] || "")
+      .toLowerCase()
+      .trim();
+    var typeNorm = normalizeTypeForFilter(row[NJ_TYPE_COL]);
+    var jobUrl = getCanonicalJobUrl(srcRichUrls[i][0], row[NJ_JOB_URL_COL]);
+    var statusEligible =
+      status === "usable" ||
+      status === "usable_for_saul" ||
+      status === "company overlapped";
+    if (!statusEligible || !jobUrl || !ALL_ALLOWED_TYPES_SET.has(typeNorm)) continue;
+
+    var companyKey = normalizeCompanyForDedupe(row[NJ_COMPANY_COL]);
+    if (
+      DEDUPE_BY_COMPANY_ON_NEW_JOBS &&
+      companyKey &&
+      seenCompanyKeys.has(companyKey)
+    ) {
+      updates.push({ rowNum: rowNum, status: "company overlapped" });
+      continue;
+    }
+
+    if (companyKey) seenCompanyKeys.add(companyKey);
+  }
+
+  for (var u = 0; u < updates.length; u++) {
+    var up = updates[u];
+    sourceSheet.getRange(up.rowNum, NJ_STATUS_COL_1_BASED).setValue(up.status);
+    srcData[up.rowNum - 1][NJ_STATUS_COL] = up.status;
+  }
 }
 
 function syncOneTargetSheet(spreadsheet, target, desired, orderedNjRows) {
@@ -485,6 +610,7 @@ function syncAllTeamSheetsFromNewJobs() {
     var srcRichUrls = source.getRange(1, 4, srcLastRow, 1).getRichTextValues();
 
     syncNewJobsAddedDatesFromSource(ss, source, srcData, srcRichUrls);
+    markOverlappedStatusesOnNewJobs(source, srcData, srcRichUrls);
 
     for (var k = 0; k < TEAM_SHEET_CONFIG.length; k++) {
       var cfg = TEAM_SHEET_CONFIG[k];

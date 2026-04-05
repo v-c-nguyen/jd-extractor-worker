@@ -1,3 +1,4 @@
+import { normalizeAppRole, type AppRole } from "@/lib/auth/app-role";
 import { getSql } from "@/lib/db/neon-sql";
 
 export type AppUserRow = {
@@ -24,6 +25,18 @@ export async function insertAppUser(params: {
   const id = rows[0]?.id;
   if (!id) throw new Error("Insert returned no app user id");
   return id;
+}
+
+/** Role from the bidder row linked to this app user (dashboard authorization). */
+export async function getAppUserRole(userId: string): Promise<AppRole> {
+  const sql = getSql();
+  const rows = (await sql`
+    SELECT b.role
+    FROM bidders b
+    WHERE b.app_user_id = ${userId}::uuid
+    LIMIT 1
+  `) as { role: string }[];
+  return normalizeAppRole(rows[0]?.role);
 }
 
 export async function findUserWithPasswordHashByEmail(

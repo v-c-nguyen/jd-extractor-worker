@@ -1,6 +1,9 @@
 import Link from "next/link";
+import { auth } from "@/auth";
 import { PageHeader } from "@/components/page-header";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { isPathForbiddenForRole } from "@/lib/auth/access-control";
+import { normalizeAppRole } from "@/lib/auth/app-role";
 import {
   SlidersHorizontal,
   Users,
@@ -49,7 +52,11 @@ const utilityLinks = [
   },
 ] as const;
 
-export default function DashboardPage() {
+export default async function DashboardPage() {
+  const session = await auth();
+  const role = normalizeAppRole(session?.user?.role);
+  const primaryLinksVisible = primaryLinks.filter((item) => !isPathForbiddenForRole(role, item.href));
+
   return (
     <div className="mx-auto max-w-3xl space-y-8">
       <PageHeader
@@ -61,7 +68,7 @@ export default function DashboardPage() {
       <div className="space-y-3">
         <h2 className="text-sm font-medium text-muted-foreground">Sections</h2>
         <ul className="grid gap-3">
-          {primaryLinks.map((item) => {
+          {primaryLinksVisible.map((item) => {
             const Icon = item.icon;
             return (
               <li key={item.href}>

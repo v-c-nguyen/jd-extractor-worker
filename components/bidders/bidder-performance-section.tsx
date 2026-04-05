@@ -3,7 +3,12 @@
 import { useCallback, useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { BidderPerformanceRow, PeriodPerformance, WeeklyTeamRatePoint } from "@/lib/bidders/performance-types";
+import type {
+  BidderPerformanceRow,
+  PeriodComparisonDelta,
+  PeriodPerformance,
+  WeeklyTeamRatePoint,
+} from "@/lib/bidders/performance-types";
 
 type PerformancePayload = {
   bidders?: BidderPerformanceRow[];
@@ -23,22 +28,87 @@ function formatWeekLabel(start: string, end: string): string {
   return `${a.toLocaleDateString(undefined, o)} – ${b.toLocaleDateString(undefined, o)}`;
 }
 
-function PeriodBlock({ label, p }: { label: string; p: PeriodPerformance }) {
+function signedInt(n: number): string {
+  if (n > 0) return `+${n.toLocaleString()}`;
+  return n.toLocaleString();
+}
+
+function CountDelta({ value }: { value: number }) {
+  if (value === 0) {
+    return <span className="text-xs font-medium tabular-nums text-muted-foreground">0</span>;
+  }
+  const up = value > 0;
+  return (
+    <span
+      className={cn(
+        "text-xs font-semibold tabular-nums",
+        up ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"
+      )}
+      title={up ? "Higher than comparison period" : "Lower than comparison period"}
+    >
+      {signedInt(value)}
+    </span>
+  );
+}
+
+function RateDelta({ deltaPoints }: { deltaPoints: number | null }) {
+  if (deltaPoints === null) {
+    return <span className="text-xs font-medium text-muted-foreground">—</span>;
+  }
+  if (deltaPoints === 0) {
+    return <span className="text-xs font-medium tabular-nums text-muted-foreground">0 pp</span>;
+  }
+  const up = deltaPoints > 0;
+  const text = `${deltaPoints > 0 ? "+" : ""}${deltaPoints} pp`;
+  return (
+    <span
+      className={cn(
+        "text-xs font-semibold tabular-nums",
+        up ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"
+      )}
+      title={up ? "Higher rate than comparison period" : "Lower rate than comparison period"}
+    >
+      {text}
+    </span>
+  );
+}
+
+function PeriodBlock({
+  label,
+  compareLabel,
+  p,
+  delta,
+}: {
+  label: string;
+  compareLabel: string;
+  p: PeriodPerformance;
+  delta: PeriodComparisonDelta;
+}) {
   return (
     <div className="rounded-lg border border-border/70 bg-muted/15 px-3 py-2.5">
       <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</p>
+      <p className="mt-0.5 text-[10px] leading-snug text-muted-foreground">vs {compareLabel}</p>
       <dl className="mt-2 space-y-1 text-sm">
         <div className="flex justify-between gap-3 tabular-nums">
           <dt className="text-muted-foreground">Interviews</dt>
-          <dd className="font-medium">{p.interviewCount.toLocaleString()}</dd>
+          <dd className="flex items-baseline gap-2 font-medium">
+            <span>{p.interviewCount.toLocaleString()}</span>
+            <CountDelta value={delta.interviewDelta} />
+          </dd>
         </div>
         <div className="flex justify-between gap-3 tabular-nums">
           <dt className="text-muted-foreground">Bids</dt>
-          <dd className="font-medium">{p.bidCount.toLocaleString()}</dd>
+          <dd className="flex items-baseline gap-2 font-medium">
+            <span>{p.bidCount.toLocaleString()}</span>
+            <CountDelta value={delta.bidDelta} />
+          </dd>
         </div>
         <div className="flex justify-between gap-3 tabular-nums">
           <dt className="text-muted-foreground">Rate</dt>
-          <dd className="font-medium">{formatRate(p.interviewRatePct)}</dd>
+          <dd className="flex items-baseline gap-2 font-medium">
+            <span>{formatRate(p.interviewRatePct)}</span>
+            <RateDelta deltaPoints={delta.rateDeltaPctPoints} />
+          </dd>
         </div>
       </dl>
       <p className="mt-1.5 text-[10px] leading-snug text-muted-foreground">Rate = interviews ÷ bids × 100%</p>
@@ -104,9 +174,24 @@ export function BidderPerformanceSection() {
             >
               <h3 className="text-sm font-semibold leading-none">{row.name}</h3>
               <div className="mt-3 grid gap-3 sm:grid-cols-3">
-                <PeriodBlock label="Today (UTC)" p={row.today} />
-                <PeriodBlock label="This week (Mon–Sun, UTC)" p={row.week} />
-                <PeriodBlock label="This month (UTC)" p={row.month} />
+                <PeriodBlock
+                  label="Today (UTC)"
+                  compareLabel="yesterday (UTC)"
+                  p={row.today}
+                  delta={row.vsYesterday}
+                />
+                <PeriodBlock
+                  label="This week (Mon–Sun, UTC)"
+                  compareLabel="last week (Mon–Sun, UTC)"
+                  p={row.week}
+                  delta={row.vsLastWeek}
+                />
+                <PeriodBlock
+                  label="This month (UTC)"
+                  compareLabel="last month (UTC)"
+                  p={row.month}
+                  delta={row.vsLastMonth}
+                />
               </div>
             </li>
           ))}

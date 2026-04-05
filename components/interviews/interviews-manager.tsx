@@ -21,6 +21,14 @@ import {
   interviewStageValues,
 } from "@/lib/interviews/schema";
 import { dispatchInterviewSchedulingChanged } from "@/lib/interview-scheduling-events";
+import type { OpenInterviewSlot } from "@/lib/interviews/scheduling-slots";
+import {
+  attachOpenSlotOrdinals,
+  encodeWorkLogSlotKey,
+  formatScheduledDateLabel,
+  parseWorkLogSlotKey,
+} from "@/lib/interviews/scheduling-slots";
+import { isStaleBookedInterview } from "@/lib/interviews/stale-booked";
 import { Loader2, Pencil, Plus, Search, Trash2, Eye, X } from "lucide-react";
 
 type ProfileInterviewCapacity = {
@@ -134,6 +142,8 @@ function dateInputValue(isoOrYmd: string | null | undefined): string {
 
 type FormState = {
   profileId: string;
+  /** Create only: `${profileId}|${workLogSlotIndex}` from scheduling-status openSlots. */
+  workLogSlotKey: string;
   interviewDate: string;
   appliedDate: string;
   bookedDate: string;
@@ -153,11 +163,13 @@ type FormState = {
 };
 
 function emptyForm(): FormState {
+  const t = todayYmd();
   return {
     profileId: "",
-    interviewDate: todayYmd(),
+    workLogSlotKey: "",
+    interviewDate: t,
     appliedDate: "",
-    bookedDate: "",
+    bookedDate: t,
     typePreset: INTERVIEW_TYPE_OPTIONS[0],
     typeOther: "",
     result: interviewResultValues[0],
@@ -180,6 +192,7 @@ function interviewToForm(i: Interview): FormState {
   const f = splitPresetOther(i.practiceField, PRACTICE_FIELD_OPTIONS);
   return {
     profileId: i.profileId,
+    workLogSlotKey: "",
     interviewDate: dateInputValue(i.interviewDate),
     appliedDate: dateInputValue(i.appliedDate),
     bookedDate: dateInputValue(i.bookedDate),
@@ -199,15 +212,17 @@ function interviewToForm(i: Interview): FormState {
   };
 }
 
-function buildPayload(form: FormState): Record<string, unknown> {
+function buildPayload(
+  form: FormState,
+  formMode: "create" | "edit" | null
+): Record<string, unknown> | null {
   const interviewType = resolvedChoice(form.typePreset, form.typeOther);
   const meetingWhere = resolvedChoice(form.wherePreset, form.whereOther);
   const practiceField = resolvedChoice(form.fieldPreset, form.fieldOther);
-  return {
-    profileId: form.profileId,
+  const shared = {
     interviewDate: form.interviewDate,
     appliedDate: form.appliedDate.trim() === "" ? null : form.appliedDate.trim(),
-    bookedDate: form.bookedDate.trim() === "" ? null : form.bookedDate.trim(),
+    bookedDate: form.bookedDate.trim(),
     interviewType,
     result: form.result,
     passStatus: form.passStatus,
@@ -219,11 +234,21 @@ function buildPayload(form: FormState): Record<string, unknown> {
     jd: form.jd.trim(),
     note: form.note.trim(),
   };
+  if (formMode === "create") {
+    const p = parseWorkLogSlotKey(form.workLogSlotKey);
+    if (!p) return null;
+    return { ...shared, profileId: p.profileId, workLogSlotIndex: p.workLogSlotIndex };
+  }
+  if (formMode === "edit") {
+    return { ...shared, profileId: form.profileId };
+  }
+  return null;
 }
 
 export function InterviewsManager() {
   const [interviews, setInterviews] = useState<Interview[]>([]);
   const [profileCapacities, setProfileCapacities] = useState<ProfileInterviewCapacity[]>([]);
+  const [openInterviewSlots, setOpenInterviewSlots] = useState<OpenInterviewSlot[]>([]);
   const [canCreateInterview, setCanCreateInterview] = useState(false);
   const [loading, setLoading] = useState(true);
   const [listError, setListError] = useState<string | null>(null);
@@ -260,19 +285,23 @@ export function InterviewsManager() {
 
       const capData = (await capRes.json().catch(() => ({}))) as {
         profileCapacities?: ProfileInterviewCapacity[];
+        openSlots?: OpenInterviewSlot[];
         canCreateInterview?: boolean;
       };
       if (capRes.ok) {
         setProfileCapacities(capData.profileCapacities ?? []);
+        setOpenInterviewSlots(capData.openSlots ?? []);
         setCanCreateInterview(Boolean(capData.canCreateInterview));
       } else {
         setProfileCapacities([]);
+        setOpenInterviewSlots([]);
         setCanCreateInterview(false);
       }
     } catch (e) {
       setListError(e instanceof Error ? e.message : "Failed to load interviews");
       setInterviews([]);
       setProfileCapacities([]);
+      setOpenInterviewSlots([]);
       setCanCreateInterview(false);
     } finally {
       setLoading(false);
@@ -295,15 +324,18 @@ export function InterviewsManager() {
     profileCapacities
   );
 
+  const openSlotSelectOptions = attachOpenSlotOrdinals(openInterviewSlots);
+
   function openCreate() {
     if (!canCreateInterview) return;
     setFormMode("create");
     setEditingId(null);
     setEditingProfileName(null);
     const next = emptyForm();
-    const eligible = profileOptionsForForm("create", "", profileCapacities);
-    if (eligible.length === 1 && eligible[0]) {
-      next.profileId = eligible[0].profileId;
+    if (openInterviewSlots.length === 1 && openInterviewSlots[0]) {
+      const s = openInterviewSlots[0];
+      next.profileId = s.profileId;
+      next.workLogSlotKey = encodeWorkLogSlotKey(s.profileId, s.workLogSlotIndex);
     }
     setForm(next);
     setFormError(null);
@@ -341,12 +373,20 @@ export function InterviewsManager() {
     e.preventDefault();
     setFormError(null);
 
-    if (!form.profileId.trim()) {
+    if (formMode === "edit" && !form.profileId.trim()) {
       setFormError("Select a profile.");
+      return;
+    }
+    if (formMode === "create" && !parseWorkLogSlotKey(form.workLogSlotKey)) {
+      setFormError("Select an interview.");
       return;
     }
     if (!form.interviewDate.trim()) {
       setFormError("Choose an interview date.");
+      return;
+    }
+    if (!form.bookedDate.trim()) {
+      setFormError("Choose a booked date.");
       return;
     }
 
@@ -366,7 +406,11 @@ export function InterviewsManager() {
       return;
     }
 
-    const payload = buildPayload(form);
+    const payload = buildPayload(form, formMode);
+    if (!payload) {
+      setFormError("Select an interview.");
+      return;
+    }
 
     setSaving(true);
     try {
@@ -445,8 +489,8 @@ export function InterviewsManager() {
             className="gap-2"
             title={
               canCreateInterview
-                ? "Add an interview detail row for a profile that is still short of its work-log total"
-                : "Every profile with a work-log interview total has enough interview details, or no totals are logged yet."
+                ? "Add a detail row for an open work-log interview slot (see scheduled date in the list)"
+                : "No open work-log interview slots, or capacity data failed to load."
             }
           >
             <Plus className="h-4 w-4" aria-hidden />
@@ -490,8 +534,16 @@ export function InterviewsManager() {
                 </TableCell>
               </TableRow>
             ) : (
-              interviews.map((row) => (
-                <TableRow key={row.id}>
+              interviews.map((row) => {
+                const staleBookedRow = isStaleBookedInterview(row.interviewDate, row.result);
+                return (
+                <TableRow
+                  key={row.id}
+                  className={cn(
+                    staleBookedRow &&
+                      "border-l-4 border-l-rose-500 bg-rose-500/[0.06] dark:bg-rose-500/10"
+                  )}
+                >
                   <TableCell className="whitespace-nowrap font-medium">{row.interviewDate}</TableCell>
                   <TableCell className="hidden max-w-[10rem] truncate sm:table-cell">{row.profileName}</TableCell>
                   <TableCell className="hidden max-w-[10rem] truncate text-muted-foreground md:table-cell">
@@ -499,7 +551,17 @@ export function InterviewsManager() {
                   </TableCell>
                   <TableCell className="hidden max-w-[8rem] truncate lg:table-cell">{row.interviewType || "—"}</TableCell>
                   <TableCell>
-                    {row.result ? <Badge variant="secondary">{row.result}</Badge> : <span className="text-muted-foreground">—</span>}
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {row.result ? <Badge variant="secondary">{row.result}</Badge> : <span className="text-muted-foreground">—</span>}
+                      {staleBookedRow ? (
+                        <Badge
+                          variant="outline"
+                          className="border-rose-500/60 text-rose-800 dark:border-rose-400/50 dark:text-rose-100"
+                        >
+                          Past date — update result
+                        </Badge>
+                      ) : null}
+                    </div>
                   </TableCell>
                   <TableCell className="hidden xl:table-cell">
                     {row.passStatus ? (
@@ -529,7 +591,8 @@ export function InterviewsManager() {
                     </div>
                   </TableCell>
                 </TableRow>
-              ))
+                );
+              })
             )}
           </TableBody>
         </Table>
@@ -551,38 +614,82 @@ export function InterviewsManager() {
         </div>
         <form className="space-y-4" onSubmit={submitForm}>
           {formError ? <p className="text-sm text-destructive">{formError}</p> : null}
+          {formMode === "edit" && isStaleBookedInterview(form.interviewDate, form.result) ? (
+            <div
+              role="status"
+              className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-950 dark:border-rose-400/35 dark:bg-rose-500/15 dark:text-rose-50"
+            >
+              <p className="font-medium">Interview date is in the past and result is still Booked.</p>
+              <p className="mt-1 text-rose-900/90 dark:text-rose-100/85">
+                Set result to Completed, Canceled, or Rescheduled before saving.
+              </p>
+            </div>
+          ) : null}
 
           <div className="grid gap-4 sm:grid-cols-2">
-            <div className="space-y-2 sm:col-span-2">
-              <Label htmlFor="int-profile">Profile</Label>
-              <select
-                id="int-profile"
-                className={selectClass}
-                required
-                value={form.profileId}
-                onChange={(e) => setForm((f) => ({ ...f, profileId: e.target.value }))}
-              >
-                <option value="">Select a profile…</option>
-                {profileSelectOptions.map((p) => (
-                  <option key={p.profileId} value={p.profileId}>
-                    {formatProfileOptionLabel(p)}
-                  </option>
-                ))}
-              </select>
-              {formMode === "create" && profileCapacities.length === 0 ? (
-                <p className="text-xs text-muted-foreground">
-                  Could not load capacity data. Ensure migrations through{" "}
-                  <code className="rounded bg-muted px-1">008_bidder_work_per_profile.sql</code> and{" "}
-                  <code className="rounded bg-muted px-1">010_interviews.sql</code> are applied.
-                </p>
-              ) : null}
-              {formMode === "create" && profileCapacities.length > 0 && profileSelectOptions.length === 0 ? (
-                <p className="text-xs text-muted-foreground">
-                  No spare slots: log a higher interview total in the daily work log for a profile, or finish entering
-                  existing interview details first.
-                </p>
-              ) : null}
-            </div>
+            {formMode === "create" ? (
+              <div className="space-y-2 sm:col-span-2">
+                <Label htmlFor="int-open-slot">Select interview</Label>
+                <select
+                  id="int-open-slot"
+                  className={selectClass}
+                  required
+                  value={form.workLogSlotKey}
+                  onChange={(e) => {
+                    const key = e.target.value;
+                    const p = parseWorkLogSlotKey(key);
+                    setForm((f) => ({
+                      ...f,
+                      workLogSlotKey: key,
+                      profileId: p?.profileId ?? "",
+                    }));
+                  }}
+                >
+                  <option value="">Choose a work-log interview…</option>
+                  {openSlotSelectOptions.map((s) => (
+                    <option
+                      key={`${s.profileId}-${s.workLogSlotIndex}`}
+                      value={encodeWorkLogSlotKey(s.profileId, s.workLogSlotIndex)}
+                    >
+                      {s.profileName} · scheduled {formatScheduledDateLabel(s.scheduledDate)}
+                      {s.groupSize > 1 ? ` (${s.ordinalInGroup}/${s.groupSize} that day)` : ""}
+                    </option>
+                  ))}
+                </select>
+                {profileCapacities.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">
+                    Could not load scheduling data. Ensure migrations through{" "}
+                    <code className="rounded bg-muted px-1">008_bidder_work_per_profile.sql</code> and{" "}
+                    <code className="rounded bg-muted px-1">010_interviews.sql</code> and{" "}
+                    <code className="rounded bg-muted px-1">013_interviews_booked_date_not_null.sql</code> are applied.
+                  </p>
+                ) : null}
+                {profileCapacities.length > 0 && openInterviewSlots.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">
+                    No open slots: log a higher interview total in the daily work log, or finish entering existing
+                    interview details first.
+                  </p>
+                ) : null}
+              </div>
+            ) : (
+              <div className="space-y-2 sm:col-span-2">
+                <Label htmlFor="int-profile">Profile</Label>
+                <select
+                  id="int-profile"
+                  className={selectClass}
+                  required
+                  value={form.profileId}
+                  onChange={(e) => setForm((f) => ({ ...f, profileId: e.target.value }))}
+                >
+                  <option value="">Select a profile…</option>
+                  {profileSelectOptions.map((p) => (
+                    <option key={p.profileId} value={p.profileId}>
+                      {formatProfileOptionLabel(p)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
 
             <div className="space-y-2">
               <Label htmlFor="int-date">Interview date</Label>
@@ -605,7 +712,13 @@ export function InterviewsManager() {
             </div>
             <div className="space-y-2 sm:col-span-2">
               <Label htmlFor="int-booked">Booked date</Label>
-              <Input id="int-booked" type="date" value={form.bookedDate} onChange={(e) => setForm((f) => ({ ...f, bookedDate: e.target.value }))} />
+              <Input
+                id="int-booked"
+                type="date"
+                required
+                value={form.bookedDate}
+                onChange={(e) => setForm((f) => ({ ...f, bookedDate: e.target.value }))}
+              />
             </div>
 
             <div className="space-y-2 sm:col-span-2">
@@ -825,6 +938,18 @@ export function InterviewsManager() {
       <dialog ref={viewRef} className={dialogClass} onClose={() => setViewing(null)}>
         {viewing ? (
           <>
+            {isStaleBookedInterview(viewing.interviewDate, viewing.result) ? (
+              <div
+                role="status"
+                aria-live="polite"
+                className="mb-4 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-950 dark:border-rose-400/35 dark:bg-rose-500/15 dark:text-rose-50"
+              >
+                <p className="font-medium">Interview date has passed but result is still Booked.</p>
+                <p className="mt-1 text-rose-900/90 dark:text-rose-100/85">
+                  Edit this row and set result to Completed, Canceled, or Rescheduled.
+                </p>
+              </div>
+            ) : null}
             <div className="mb-4 flex items-start justify-between gap-4">
               <div>
                 <h2 className="text-lg font-semibold">{viewing.company.trim() || viewing.profileName}</h2>
@@ -848,7 +973,7 @@ export function InterviewsManager() {
                 </div>
                 <div>
                   <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Booked date</dt>
-                  <dd>{viewing.bookedDate ?? "—"}</dd>
+                  <dd>{viewing.bookedDate}</dd>
                 </div>
                 <div>
                   <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Type</dt>

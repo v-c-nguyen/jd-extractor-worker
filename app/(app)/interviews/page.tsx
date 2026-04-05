@@ -7,7 +7,7 @@ export default function InterviewsPage() {
       <PageHeader
         eyebrow="Operations"
         title="Interviews"
-        description="Add, edit, browse, and remove interview detail rows per profile. How many you may add is capped by the sum of interview counts in the daily work log for that profile."
+        description="When adding details, pick an open interview from the work log (scheduled date comes from the day those counts were logged). Edit and browse existing rows as usual."
       />
 
       <InterviewsManager />

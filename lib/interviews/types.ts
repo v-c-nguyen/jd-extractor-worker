@@ -4,7 +4,7 @@ export type Interview = {
   profileName: string;
   interviewDate: string;
   appliedDate: string | null;
-  bookedDate: string | null;
+  bookedDate: string;
   interviewType: string;
   result: string;
   passStatus: string;

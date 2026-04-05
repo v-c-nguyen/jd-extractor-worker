@@ -1,6 +1,8 @@
 import NextAuth from "next-auth";
 import { NextResponse } from "next/server";
 import { authConfig } from "@/auth.config";
+import { isPathForbiddenForRole } from "@/lib/auth/access-control";
+import { normalizeAppRole } from "@/lib/auth/app-role";
 
 const { auth } = NextAuth(authConfig);
 
@@ -16,6 +18,10 @@ export default auth((req) => {
     if (!isAuthed) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+    const role = normalizeAppRole(req.auth?.user?.role);
+    if (isPathForbiddenForRole(role, pathname)) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
     return NextResponse.next();
   }
 
@@ -27,6 +33,13 @@ export default auth((req) => {
 
   if (isAuthed && pathname === "/signin") {
     return NextResponse.redirect(new URL("/me", req.nextUrl.origin));
+  }
+
+  if (isAuthed) {
+    const role = normalizeAppRole(req.auth?.user?.role);
+    if (isPathForbiddenForRole(role, pathname)) {
+      return NextResponse.redirect(new URL("/dashboard", req.nextUrl.origin));
+    }
   }
 
   return NextResponse.next();

@@ -3,7 +3,7 @@ import Credentials from "next-auth/providers/credentials";
 import { compare } from "bcryptjs";
 import { z } from "zod";
 import { authConfig } from "@/auth.config";
-import { findUserWithPasswordHashByEmail } from "@/lib/auth/user-repo";
+import { findUserWithPasswordHashByEmail, getAppUserRole } from "@/lib/auth/user-repo";
 
 const credentialsSchema = z.object({
   email: z.string().email(),
@@ -27,10 +27,12 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         if (!row) return null;
         const valid = await compare(parsed.data.password, row.password_hash);
         if (!valid) return null;
+        const role = await getAppUserRole(row.id);
         return {
           id: row.id,
           email: row.email,
           name: row.name,
+          role,
         };
       },
     }),

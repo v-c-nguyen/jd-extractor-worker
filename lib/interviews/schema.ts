@@ -7,7 +7,7 @@ const dateYmd = z
 
 const optionalDateYmd = z.union([dateYmd, z.null()]).optional();
 
-export const interviewResultValues = ["Booked", "Rescheduled", "Completed"] as const;
+export const interviewResultValues = ["Booked", "Rescheduled", "Completed", "Canceled"] as const;
 export const interviewPassStatusValues = ["Pending", "Passed", "Failed"] as const;
 export const interviewStageValues = [
   "Initial",
@@ -19,9 +19,11 @@ export const interviewStageValues = [
 
 export const createInterviewSchema = z.object({
   profileId: z.string().uuid(),
+  /** Index of the work-log slot this detail row fills (see /api/interviews/scheduling-status openSlots). */
+  workLogSlotIndex: z.number().int().nonnegative(),
   interviewDate: dateYmd,
   appliedDate: optionalDateYmd,
-  bookedDate: optionalDateYmd,
+  bookedDate: dateYmd,
   interviewType: z.string().trim().min(1).max(200),
   result: z.enum(interviewResultValues),
   passStatus: z.enum(interviewPassStatusValues),
@@ -39,7 +41,7 @@ export const patchInterviewSchema = z
     profileId: z.string().uuid().optional(),
     interviewDate: dateYmd.optional(),
     appliedDate: optionalDateYmd,
-    bookedDate: optionalDateYmd,
+    bookedDate: dateYmd.optional(),
     interviewType: z.string().trim().min(1).max(200).optional(),
     result: z.enum(interviewResultValues).optional(),
     passStatus: z.enum(interviewPassStatusValues).optional(),

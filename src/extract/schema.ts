@@ -49,6 +49,7 @@ export const JobTypeEnum = z.enum([
   "FullStack - Go",
   "FullStack - Java",
   "FullStack - PHP",
+  "DevOps",
   "QA",
   "Tech Support or Solutions",
 ]);
@@ -141,6 +142,7 @@ export const JSON_SCHEMA_FOR_OPENAI = {
           "FullStack - Go",
           "FullStack - Java",
           "FullStack - PHP",
+          "DevOps",
           "QA",
           "Tech Support or Solutions",
           null,

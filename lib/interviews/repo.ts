@@ -1,6 +1,7 @@
 import { getSql } from "@/lib/db/neon-sql";
 import type { Interview } from "@/lib/interviews/types";
 import type { CreateInterviewInput, PatchInterviewInput } from "@/lib/interviews/schema";
+import type { StaleBookedInterviewSummary } from "@/lib/interviews/stale-booked";
 
 function toIso(v: unknown): string {
   if (v instanceof Date) return v.toISOString();
@@ -42,13 +43,15 @@ type InterviewRow = {
 function mapRow(row: InterviewRow): Interview {
   const idate = dateOnly(row.interview_date);
   if (!idate) throw new Error("Invalid interview_date");
+  const bdate = dateOnly(row.booked_date);
+  if (!bdate) throw new Error("Invalid booked_date");
   return {
     id: row.id,
     profileId: row.profile_id,
     profileName: row.profile_name,
     interviewDate: idate,
     appliedDate: dateOnly(row.applied_date),
-    bookedDate: dateOnly(row.booked_date),
+    bookedDate: bdate,
     interviewType: row.interview_type,
     result: row.result,
     passStatus: row.pass_status,
@@ -106,6 +109,33 @@ export async function listInterviews(search?: string): Promise<Interview[]> {
   return rows.map((row) => mapRow(row));
 }
 
+/** Interview date before today (UTC) and result still Booked — needs Completed, Canceled, or Rescheduled. */
+export async function listStaleBookedInterviewSummaries(): Promise<StaleBookedInterviewSummary[]> {
+  const sql = getSql();
+  const rows = (await sql`
+    SELECT
+      i.id,
+      p.name AS profile_name,
+      i.interview_date,
+      i.company
+    FROM interviews i
+    JOIN profiles p ON p.id = i.profile_id
+    WHERE i.interview_date::date < (CURRENT_TIMESTAMP AT TIME ZONE 'utc')::date
+      AND lower(trim(i.result)) = 'booked'
+    ORDER BY i.interview_date ASC, lower(p.name) ASC, i.id ASC
+  `) as { id: string; profile_name: string; interview_date: unknown; company: string }[];
+  return rows.map((r) => {
+    const idate = dateOnly(r.interview_date);
+    if (!idate) throw new Error("Invalid interview_date in stale booked query");
+    return {
+      id: r.id,
+      profileName: r.profile_name,
+      interviewDate: idate,
+      company: r.company ?? "",
+    };
+  });
+}
+
 export async function countInterviewsForProfile(profileId: string): Promise<number> {
   const sql = getSql();
   const rows = (await sql`
@@ -123,6 +153,25 @@ export async function sumWorkInterviewCountForProfile(profileId: string): Promis
     WHERE profile_id = ${profileId}::uuid
   `) as { s: number }[];
   return rows[0]?.s ?? 0;
+}
+
+/** Per profile and calendar day: total interviews logged (sum across bidders). */
+export async function listAllWorkInterviewAggregates(): Promise<
+  { profileId: string; workDate: string; count: number }[]
+> {
+  const sql = getSql();
+  const rows = (await sql`
+    SELECT profile_id, work_date, SUM(interview_count)::int AS cnt
+    FROM bidder_work_entries
+    GROUP BY profile_id, work_date
+    HAVING SUM(interview_count) > 0
+    ORDER BY profile_id, work_date ASC
+  `) as { profile_id: string; work_date: unknown; cnt: number }[];
+  return rows.map((r) => {
+    const wd = dateOnly(r.work_date);
+    if (!wd) throw new Error("Invalid work_date in bidder_work_entries");
+    return { profileId: r.profile_id, workDate: wd, count: r.cnt };
+  });
 }
 
 export type ProfileInterviewCapacity = {
@@ -205,7 +254,7 @@ export async function createInterview(input: CreateInterviewInput): Promise<Inte
       ${input.profileId}::uuid,
       ${input.interviewDate}::date,
       ${input.appliedDate === undefined ? null : input.appliedDate},
-      ${input.bookedDate === undefined ? null : input.bookedDate},
+      ${input.bookedDate}::date,
       ${input.interviewType},
       ${input.result},
       ${input.passStatus},
