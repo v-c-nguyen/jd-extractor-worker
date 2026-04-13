@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ComponentProps } from "react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
@@ -15,7 +15,7 @@ import {
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 import type { Bidder } from "@/lib/bidders/types";
-import { Loader2, Pencil, Plus, Search, Trash2, Eye, X } from "lucide-react";
+import { Loader2, Pencil, Plus, RefreshCw, Search, Trash2, Eye, X } from "lucide-react";
 
 const textareaClass = cn(
   "flex min-h-[88px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-base shadow-sm transition-colors",
@@ -23,8 +23,11 @@ const textareaClass = cn(
   "disabled:cursor-not-allowed disabled:opacity-50 md:text-sm"
 );
 
-const dialogClass =
-  "w-[min(100%,32rem)] max-h-[90vh] overflow-y-auto rounded-xl border border-border bg-card p-6 shadow-lg backdrop:bg-black/50";
+const dialogClass = cn(
+  "fixed left-1/2 top-1/2 z-50 w-[min(100%,40rem)] max-h-[min(90vh,720px)] -translate-x-1/2 -translate-y-1/2",
+  "overflow-y-auto rounded-xl border border-border bg-card p-6 shadow-xl",
+  "[&::backdrop]:fixed [&::backdrop]:inset-0 [&::backdrop]:bg-black/45 [&::backdrop]:backdrop-blur-[1px]"
+);
 
 const BIDDER_STATUS_OPTIONS = ["Active", "Pending", "Inactive"] as const;
 const BIDDER_ROLE_OPTIONS = ["Bidder", "Manager", "Administrator"] as const;
@@ -126,6 +129,25 @@ function formatRate(b: Bidder) {
     minimumFractionDigits: 0,
     maximumFractionDigits: 4,
   })}`;
+}
+
+function contactsSorted(b: Bidder): Bidder["contacts"] {
+  return [...b.contacts].sort((a, c) => a.sortOrder - c.sortOrder);
+}
+
+function primaryContactPreview(b: Bidder): string | null {
+  const first = contactsSorted(b)[0];
+  if (!first?.value?.trim()) return null;
+  const label = first.label?.trim();
+  return label ? `${label}: ${first.value}` : first.value;
+}
+
+function statusBadgeVariant(status: string): ComponentProps<typeof Badge>["variant"] {
+  const t = status.trim().toLowerCase();
+  if (t === "active") return "success";
+  if (t === "pending") return "warning";
+  if (t === "inactive") return "outline";
+  return "secondary";
 }
 
 export function BiddersManager() {
@@ -334,6 +356,22 @@ export function BiddersManager() {
     }
   }
 
+  const listSummary =
+    loading ? (
+      "Loading directory…"
+    ) : debouncedSearch.trim() ? (
+      <>
+        <span className="font-medium text-foreground">{bidders.length}</span>
+        {bidders.length === 1 ? " match" : " matches"}
+        <span className="text-muted-foreground"> for “{debouncedSearch.trim()}”</span>
+      </>
+    ) : (
+      <>
+        <span className="font-medium text-foreground">{bidders.length}</span>
+        {bidders.length === 1 ? " bidder" : " bidders"}
+      </>
+    );
+
   return (
     <div className="space-y-4">
       {listError ? (
@@ -342,8 +380,8 @@ export function BiddersManager() {
         </p>
       ) : null}
 
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="relative max-w-md flex-1">
+      <div className="flex flex-col gap-3 rounded-xl border border-border/70 bg-muted/25 p-3 shadow-sm sm:flex-row sm:items-center sm:justify-between sm:p-4">
+        <div className="relative min-w-0 flex-1 sm:max-w-md">
           <Search
             className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
             aria-hidden
@@ -351,34 +389,49 @@ export function BiddersManager() {
           <Input
             type="search"
             placeholder="Search by name or country…"
-            className="pl-9"
+            className="border-border/80 bg-background pl-9 shadow-sm"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             aria-label="Search bidders"
           />
         </div>
-        <Button type="button" onClick={openCreate} className="shrink-0 gap-2">
-          <Plus className="h-4 w-4" aria-hidden />
-          Add bidder
-        </Button>
+        <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+          <p className="min-w-0 flex-1 text-sm text-muted-foreground sm:flex-none sm:text-right">{listSummary}</p>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="shrink-0 gap-1.5"
+            onClick={() => void load()}
+            disabled={loading}
+            aria-label="Refresh bidder list"
+          >
+            <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} aria-hidden />
+            Refresh
+          </Button>
+          <Button type="button" onClick={openCreate} className="shrink-0 gap-2 shadow-sm">
+            <Plus className="h-4 w-4" aria-hidden />
+            Add bidder
+          </Button>
+        </div>
       </div>
 
-      <div className="rounded-md border border-border/80">
+      <div className="overflow-hidden rounded-xl border border-border/80 bg-card shadow-sm">
         <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Name</TableHead>
-              <TableHead className="hidden sm:table-cell">Country</TableHead>
-              <TableHead className="hidden md:table-cell">Rate</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead className="hidden lg:table-cell">Role</TableHead>
-              <TableHead className="text-right">Actions</TableHead>
+          <TableHeader className="sticky top-0 z-10 border-b bg-muted/95 shadow-[0_1px_0_hsl(var(--border))] backdrop-blur-sm">
+            <TableRow className="border-0 hover:bg-transparent">
+              <TableHead className="min-w-[11rem]">Bidder</TableHead>
+              <TableHead className="hidden w-[8rem] sm:table-cell">Country</TableHead>
+              <TableHead className="hidden w-[7.5rem] md:table-cell">Rate</TableHead>
+              <TableHead className="w-[6.5rem]">Status</TableHead>
+              <TableHead className="hidden max-w-[9rem] lg:table-cell">Role</TableHead>
+              <TableHead className="w-[1%] whitespace-nowrap text-right">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {loading ? (
               <TableRow>
-                <TableCell colSpan={6} className="h-24 text-center text-muted-foreground">
+                <TableCell colSpan={6} className="h-32 text-center text-muted-foreground">
                   <span className="inline-flex items-center gap-2">
                     <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
                     Loading…
@@ -387,42 +440,80 @@ export function BiddersManager() {
               </TableRow>
             ) : bidders.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={6} className="h-24 text-center text-muted-foreground">
-                  No bidders yet. Add one to get started.
+                <TableCell colSpan={6} className="h-32 px-6 text-center text-muted-foreground">
+                  <p className="font-medium text-foreground/80">
+                    {debouncedSearch.trim() ? "No bidders match your search." : "No bidders yet."}
+                  </p>
+                  <p className="mt-1 text-sm">
+                    {debouncedSearch.trim()
+                      ? "Try another name or country, or clear the search."
+                      : "Add a bidder to build your directory."}
+                  </p>
+                  {!debouncedSearch.trim() ? (
+                    <Button type="button" className="mt-4 gap-2" onClick={openCreate}>
+                      <Plus className="h-4 w-4" aria-hidden />
+                      Add bidder
+                    </Button>
+                  ) : null}
                 </TableCell>
               </TableRow>
             ) : (
-              bidders.map((b) => (
-                <TableRow key={b.id}>
-                  <TableCell className="font-medium">{b.name}</TableCell>
-                  <TableCell className="hidden text-muted-foreground sm:table-cell">{b.country}</TableCell>
-                  <TableCell className="hidden tabular-nums md:table-cell">{formatRate(b)}</TableCell>
-                  <TableCell>
-                    <Badge variant="secondary">{b.status}</Badge>
-                  </TableCell>
-                  <TableCell className="hidden max-w-[10rem] truncate lg:table-cell">{b.role}</TableCell>
-                  <TableCell className="text-right">
-                    <div className="flex justify-end gap-1">
-                      <Button type="button" variant="ghost" size="icon" onClick={() => openView(b)} aria-label="View details">
-                        <Eye className="h-4 w-4" />
-                      </Button>
-                      <Button type="button" variant="ghost" size="icon" onClick={() => openEdit(b)} aria-label="Edit bidder">
-                        <Pencil className="h-4 w-4" />
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="text-destructive hover:text-destructive"
-                        onClick={() => removeBidder(b)}
-                        aria-label="Delete bidder"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ))
+              bidders.map((b) => {
+                const preview = primaryContactPreview(b);
+                const metaLine = [b.country, formatRate(b), b.role].filter(Boolean).join(" · ");
+                return (
+                  <TableRow
+                    key={b.id}
+                    className="group cursor-pointer border-border/60"
+                    onClick={() => openView(b)}
+                    title="View profile"
+                  >
+                    <TableCell className="align-top">
+                      <div className="flex flex-col gap-0.5 py-0.5">
+                        <span className="font-medium text-foreground group-hover:text-primary">{b.name}</span>
+                        {preview ? (
+                          <span className="line-clamp-2 text-xs text-muted-foreground">{preview}</span>
+                        ) : null}
+                        <span className="text-xs text-muted-foreground lg:hidden">{metaLine}</span>
+                      </div>
+                    </TableCell>
+                    <TableCell className="hidden align-middle text-muted-foreground sm:table-cell">{b.country}</TableCell>
+                    <TableCell className="hidden align-middle tabular-nums text-muted-foreground md:table-cell">
+                      {formatRate(b)}
+                    </TableCell>
+                    <TableCell className="align-middle">
+                      <Badge variant={statusBadgeVariant(b.status)} className="whitespace-nowrap">
+                        {b.status}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="hidden max-w-[9rem] align-middle text-muted-foreground lg:table-cell">
+                      <span className="line-clamp-2" title={b.role}>
+                        {b.role}
+                      </span>
+                    </TableCell>
+                    <TableCell className="text-right align-middle" onClick={(e) => e.stopPropagation()}>
+                      <div className="inline-flex items-center gap-0.5 rounded-lg border border-border/60 bg-muted/30 p-0.5 shadow-sm">
+                        <Button type="button" variant="ghost" size="icon" className="h-8 w-8" onClick={() => openView(b)} aria-label="View details">
+                          <Eye className="h-4 w-4" />
+                        </Button>
+                        <Button type="button" variant="ghost" size="icon" className="h-8 w-8" onClick={() => openEdit(b)} aria-label="Edit bidder">
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                          onClick={() => removeBidder(b)}
+                          aria-label="Delete bidder"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                );
+              })
             )}
           </TableBody>
         </Table>
@@ -642,7 +733,7 @@ export function BiddersManager() {
               <div>
                 <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Status</dt>
                 <dd>
-                  <Badge variant="secondary">{viewing.status}</Badge>
+                  <Badge variant={statusBadgeVariant(viewing.status)}>{viewing.status}</Badge>
                 </dd>
               </div>
               <div>

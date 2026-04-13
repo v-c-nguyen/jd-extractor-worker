@@ -1,5 +1,5 @@
 /**
- * new_jobs → team sheets (Saul, Jimmy, CNguyen, CSmith, CGlynn)
+ * new_jobs → team sheets (Saul, Jimmy, CNguyen, CSmith, CGlynn, Daniel)
  *
  * - Rows with status usable (+ usable_for_saul on Saul only) + type in each tab’s allow-list; meta Z = new_jobs row #; C:E = URL/company/type.
  * - new_jobs column A = date when job URL (D) is present; cleared when D is empty (UI edit on D or time-driven sync).
@@ -58,6 +58,9 @@ var ENGINEERING_TYPE_LABELS = [
 /** CNguyen only — strictly QA; engineering types stay in ENGINEERING_TYPE_LABELS. */
 var QA_TYPE_LABELS = ["QA"];
 
+/** Daniel only — tech support / solutions roles; not mixed into engineering tabs. */
+var DANIEL_TYPE_LABELS = ["Tech Support or Solutions"];
+
 function normalizeTypeForFilter(s) {
   return String(s || "")
     .toLowerCase()
@@ -79,12 +82,16 @@ function buildAllowedTypesSet(labels) {
 
 var ENGINEERING_TYPES_SET = buildAllowedTypesSet(ENGINEERING_TYPE_LABELS);
 var QA_TYPES_SET = buildAllowedTypesSet(QA_TYPE_LABELS);
+var DANIEL_TYPES_SET = buildAllowedTypesSet(DANIEL_TYPE_LABELS);
 var ALL_ALLOWED_TYPES_SET = (function () {
   var s = new Set();
   ENGINEERING_TYPES_SET.forEach(function (v) {
     s.add(v);
   });
   QA_TYPES_SET.forEach(function (v) {
+    s.add(v);
+  });
+  DANIEL_TYPES_SET.forEach(function (v) {
     s.add(v);
   });
   return s;
@@ -100,6 +107,7 @@ var TEAM_SHEET_CONFIG = [
   { sheetName: "CNguyen", allowedTypes: QA_TYPES_SET /* QA only — not AI/FullStack/DevOps */ },
   { sheetName: "CSmith", allowedTypes: ENGINEERING_TYPES_SET },
   { sheetName: "CGlynn", allowedTypes: ENGINEERING_TYPES_SET },
+  { sheetName: "Daniel", allowedTypes: DANIEL_TYPES_SET },
 ];
 
 function getCanonicalJobUrl(richCell, plainFromValues) {

@@ -19,7 +19,7 @@ const primaryLinks = [
   {
     href: "/job-extractor",
     title: "Job extractor",
-    description: "Start, stop, and monitor the extraction pipeline and logs.",
+    description: "Pipeline control and live logs on separate pages.",
     icon: SlidersHorizontal,
   },
   {

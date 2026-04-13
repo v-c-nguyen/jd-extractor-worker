@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { JobExtractorSectionShell } from "@/components/job-extractor/job-extractor-section-shell";
 
 export const metadata: Metadata = {
   title: "Job extractor",
@@ -6,5 +7,5 @@ export const metadata: Metadata = {
 };
 
 export default function JobExtractorLayout({ children }: { children: React.ReactNode }) {
-  return children;
+  return <JobExtractorSectionShell>{children}</JobExtractorSectionShell>;
 }
