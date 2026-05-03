@@ -16,32 +16,31 @@ function getMaxJdChars(): number {
   return Number.isNaN(n) || n < 1000 ? DEFAULT_MAX_JD_CHARS : Math.min(n, 50_000);
 }
 
-const SYSTEM_PROMPT = `You are a structured data extractor for job descriptions.
-
-Your task is to extract specific fields from the job description text provided.
+const SYSTEM_PROMPT = `Extract job fields from a JD into the required JSON schema.
 
 Rules:
-1. Use ONLY information explicitly present in the job description text.
-2. If a field is not mentioned or cannot be determined, return null or "Not mentioned" as appropriate.
-3. Prefer concise values (e.g., "San Francisco, CA" not "San Francisco, California, United States of America").
-4. For salary, extract numeric values only (e.g., 150000 not "$150,000").
+- Use only explicit evidence from the JD for all fields except industry fallback.
+- If unknown: return null (or "Not mentioned" for enum fields that require it).
+- Keep values short and canonical.
+- Salary must be numeric only (no currency symbols or commas).
 
-Location: Do NOT extract a specific city or address. Determine only whether the job is in the United States (US) or not. Return "yes" if the job location is in the US, "no" if it is outside the US. Return null only if it cannot be determined.
-Industry: Choose exactly ONE value from this list: healthcare, finance, bank, security, ecommerce, edtech, adtech, media or streaming, other. Pick the single best match for the company or role. Use "other" if none of the others fit. Return null only if it cannot be determined.
-Work mode: Choose exactly ONE value: "Fully Remote" (fully remote only), "Open to Remote" (remote is an option or flexible), "Hybrid", "Onsite", "Not mentioned". Use "Not mentioned" if unclear.
-Travel: Extract travel requirements. Use a specific percentage if stated (e.g. "25%", "50%"), or "occasional" if travel is mentioned but not a percentage, or "not required" if the JD says no travel, or "not mentioned" if not specified. Return null only if it cannot be determined.
-Clearance required: If the job requires security clearance (e.g. Secret, Top Secret, etc.), return "yes". Otherwise return "no". Return null only if it cannot be determined.
-Government agency: Return "yes" if (a) the employer or company is a government agency (federal, state, or local), OR (b) the job is clearly for or in support of a government agency (e.g. contractor role supporting IRS, DoD, or other government; job or clearance explicitly tied to a named government agency like Internal Revenue Service, Department of Defense, etc.). Otherwise return "no". Return null only if it cannot be determined.
-Type: Choose exactly ONE value that best matches the job based on the description: "AI Integration - Full Stack", "Applied AI & Automation", "AI Product", "AI & ML", "FullStack - JS", "FullStack - Python", "FullStack - C#", "FullStack - Ruby", "FullStack - Go", "FullStack - Java", "FullStack - PHP", "DevOps" (infrastructure, CI/CD, platform, SRE, cloud operations roles that are not primarily application full-stack development), "QA", "Tech Support or Solutions". Pick the single best fit (e.g. QA for quality assurance roles, FullStack - X for full-stack with that stack, AI/ML for ML-heavy roles). Return null only if it cannot be determined.
-Seniority: Choose exactly ONE value that best matches the job level: "Staff", "Lead", "Principal", "Senior", or "Normal". Use title/level cues (e.g. Senior/Staff/Lead/Principal in the title or requirements). Use "Normal" for mid-level or when no seniority is indicated. Return null only if it cannot be determined.`;
+Field guidance:
+- location: US-only flag -> "yes" or "no"; null if unclear.
+- industry: choose exactly one (exact string):
+  "Software/SaaS", "Cybersecurity", "AI/ML", "IT Services", "Telecom", "E-commerce", "Retail", "Consumer Electronics", "Ad/MarTech", "Media/News/Publishing", "Gaming", "Banking/Financial Services", "Fintech", "Insurance", "Investment/Asset Mgmt", "Professional Services", "Healthcare Providers", "HealthTech", "Biotech/Pharma", "Med Devices/Equipment", "Manufacturing", "Automotive/Mobility", "Aerospace/Defense", "Energy/Utilities", "Construction/Engineering", "Logistics/Transportation", "Supply Chain/Ops Tech", "Travel/Hospitality", "Real Estate", "PropTech", "Government/Public Sector", "Education/EdTech", "Non-Profit/NGO", "Security (Physical/National)".
+- industry fallback: if the JD does not clearly state the industry, analyze the company's likely industry using company name, business description, products/services, customer type, domain cues in the URL, and any context in the JD. Then choose the single best-matching category from the allowed list above. Do not leave industry null when a best-fit category can be reasonably inferred.
+- work_mode: one of "Fully Remote", "Open to Remote", "Hybrid", "Onsite", "Not mentioned".
+- travel: use "%", "occasional", "not required", or "not mentioned"; null only if truly unknown.
+- clearance_required: "yes" if security clearance is required, else "no", null if unclear.
+- government_agency: "yes" if employer is government or role clearly supports a named government agency; else "no"; null if unclear.
+- type: choose exactly one allowed type; prefer the single best fit.
+- seniority: choose one of "Staff", "Lead", "Principal", "Senior", "Normal"; use "Normal" when level is not explicit but role is otherwise standard.
+`;
 
 function buildUserPrompt(jdText: string, jobUrl: string): string {
-  return `Job URL: ${jobUrl}
-
-Job Description:
-${jdText}
-
-Extract the structured data from this job description.`;
+  return `URL: ${jobUrl}
+JD:
+${jdText}`;
 }
 
 /** Token usage as returned by the OpenAI API. */

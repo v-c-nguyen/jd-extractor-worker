@@ -30,20 +30,6 @@ function getHeaderIndexOrThrow(
   return idx;
 }
 
-function getHeaderIndexOptional(
-  headerRow: (string | number | boolean | undefined)[],
-  name: string
-): number | null {
-  const idx = headerRow.findIndex(
-    (h) => String(h ?? "").trim().toLowerCase() === name.toLowerCase()
-  );
-  return idx === -1 ? null : idx;
-}
-
-let warnedMissingRetryCountCol = false;
-let warnedMissingLastErrorStageCol = false;
-let warnedMissingNextRetryAtCol = false;
-
 export async function runPoll(
   sheets: ReturnType<typeof google.sheets>,
   sheetId: string,
@@ -69,29 +55,6 @@ export async function runPoll(
   );
   const errorMessageIdx = getHeaderIndexOrThrow(headerRow, "error_message");
 
-  const retryCountIdx = getHeaderIndexOptional(headerRow, "retry_count");
-  const lastErrorStageIdx = getHeaderIndexOptional(headerRow, "last_error_stage");
-  const nextRetryAtIdx = getHeaderIndexOptional(headerRow, "next_retry_at");
-
-  if (retryCountIdx === null && !warnedMissingRetryCountCol) {
-    console.warn(
-      "[POLL] Warning: 'retry_count' column not found; retry metadata will not be fully written."
-    );
-    warnedMissingRetryCountCol = true;
-  }
-  if (lastErrorStageIdx === null && !warnedMissingLastErrorStageCol) {
-    console.warn(
-      "[POLL] Warning: 'last_error_stage' column not found; retry metadata will not be fully written."
-    );
-    warnedMissingLastErrorStageCol = true;
-  }
-  if (nextRetryAtIdx === null && !warnedMissingNextRetryAtCol) {
-    console.warn(
-      "[POLL] Warning: 'next_retry_at' column not found; retry scheduling will be limited."
-    );
-    warnedMissingNextRetryAtCol = true;
-  }
-
   const { updates: promoteUpdates, promotedRowNums } = buildPromoteEmptyJobUrlBatch(
     grid,
     sheetTab,
@@ -114,7 +77,6 @@ export async function runPoll(
 
   const toClaim: { sheetRowNum: number; url: string }[] = [];
   const now = new Date();
-  const nowTime = now.getTime();
   for (let i = 1; i < grid.length && toClaim.length < MAX_BATCH; i++) {
     const row = grid[i] ?? [];
     const jobUrl = row[jobUrlIdx];
@@ -126,23 +88,7 @@ export async function runPoll(
     const isNew =
       statusUpper === "NEW" || promotedRowNums.has(i + 1);
 
-    let isRetryEligible = false;
-    if (statusUpper === "RETRY") {
-      if (nextRetryAtIdx === null) {
-        isRetryEligible = true;
-      } else {
-        const nextRetryRaw = row[nextRetryAtIdx];
-        const nextRetryStr = String(nextRetryRaw ?? "").trim();
-        if (nextRetryStr) {
-          const nextTime = Date.parse(nextRetryStr);
-          if (!Number.isNaN(nextTime) && nextTime <= nowTime) {
-            isRetryEligible = true;
-          }
-        }
-      }
-    }
-
-    if (hasJobUrl && (isNew || isRetryEligible)) {
+    if (hasJobUrl && isNew) {
       toClaim.push({
         sheetRowNum: i + 1,
         url: String(jobUrl).trim(),

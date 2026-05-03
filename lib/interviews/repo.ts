@@ -109,6 +109,17 @@ export async function listInterviews(search?: string): Promise<Interview[]> {
   return rows.map((row) => mapRow(row));
 }
 
+/** Interviews whose `interview_date` is `dateIso` (YYYY-MM-DD). Ordered by profile name, then creation time. */
+export async function listInterviewsForDate(dateIso: string): Promise<Interview[]> {
+  const sql = getSql();
+  const rows = (await sql`
+    ${sql.unsafe(listSelect)}
+    WHERE i.interview_date = ${dateIso}::date
+    ORDER BY lower(p.name) ASC, i.created_at ASC
+  `) as InterviewRow[];
+  return rows.map((row) => mapRow(row));
+}
+
 /** Interview date before today (UTC) and result still Booked — needs Completed, Canceled, or Rescheduled. */
 export async function listStaleBookedInterviewSummaries(): Promise<StaleBookedInterviewSummary[]> {
   const sql = getSql();

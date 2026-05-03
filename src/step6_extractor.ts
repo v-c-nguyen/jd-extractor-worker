@@ -13,7 +13,6 @@ import {
   validateExtraction,
   type ValidateExtractionInput,
 } from "./extract/validate_extraction.js";
-import { parseRetryCount, computeNextRetryAt } from "./retry.js";
 
 const POLL_INTERVAL_MS = 30_000;
 const MAX_BATCH = 3;
@@ -22,19 +21,6 @@ const ERROR_MESSAGE_MAX_LEN = 200;
 const CACHE_DIR = "cache";
 /** Rows stuck in extracting_in_progress longer than this are re-picked (recovery from crash). */
 const EXTRACT_CLAIM_STALE_MS = 5 * 60 * 1000;
-
-const TRANSIENT_ERROR_PATTERNS = [
-  "timeout",
-  "etimedout",
-  "econnreset",
-  "econnrefused",
-  "429",
-  "503",
-  "rate_limit",
-  "rate limit",
-  "socket",
-  "network",
-];
 
 function indexToColumnLetter(index: number): string {
   let colNum = index + 1;
@@ -62,14 +48,6 @@ function getHeaderIndexOrThrow(
 function truncateError(msg: string): string {
   if (msg.length <= ERROR_MESSAGE_MAX_LEN) return msg;
   return msg.slice(0, ERROR_MESSAGE_MAX_LEN - 3) + "...";
-}
-
-function classifyError(errMsg: string): "retry" | "failed" {
-  const lower = errMsg.toLowerCase();
-  if (TRANSIENT_ERROR_PATTERNS.some((p) => lower.includes(p))) {
-    return "retry";
-  }
-  return "failed";
 }
 
 function valueToSheet(val: string | number | null): string | number {
@@ -109,35 +87,47 @@ function isClaimStale(lastProcessedAtVal: unknown): boolean {
 /** Not usable: Staff | Principal | Lead */
 const NOT_USABLE_SENIORITY = new Set(["Staff", "Principal", "Lead"]);
 
-/** Industries that should route to usable_for_saul (lowercase). */
-const USABLE_FOR_SAUL_INDUSTRIES = new Set(["healthcare", "finance"]);
-/** Not usable industries (lowercase), excluding usable_for_saul industries. */
-const NOT_USABLE_INDUSTRIES = new Set(["bank", "news", "security"]);
+/** Exact-match industry buckets (normalized to lowercase). */
+const NOT_USABLE_INDUSTRIES = new Set([
+  "security (physical/national)",
+  "aerospace/defense",
+  "government/public sector",
+  "energy/utilities",
+  "healthcare providers",
+  "banking/financial services",
+  "insurance",
+  "investment/asset mgmt",
+  "biotech/pharma",
+  "med devices/equipment",
+  "healthtech",
+  "professional services",
+  "fintech",
+  "cybersecurity",
+]);
 
 function getExtractionStatusForPassedValidation(
   extraction: JobExtraction
-): "usable" | "usable_for_saul" | "not_usable" {
+): "usable" | "consider" | "not_usable" {
   const seniority = extraction.seniority?.trim();
   if (seniority && NOT_USABLE_SENIORITY.has(seniority)) return "not_usable";
 
   const workMode = extraction.work_mode?.trim();
   if (workMode === "Hybrid" || workMode === "Onsite") return "not_usable";
+  if (workMode === "Not mentioned") return "consider";
 
   const travelStr = extraction.travel?.trim() ?? "";
   if (travelStr) {
     const match = travelStr.match(/(\d{1,3})\s*%?/);
     if (match) {
       const pct = parseInt(match[1]!, 10);
-      if (!Number.isNaN(pct) && pct > 25) return "not_usable";
+      if (!Number.isNaN(pct) && pct > 10) return "not_usable";
     }
   }
 
   if (extraction.location?.trim().toLowerCase() === "no") return "not_usable";
 
   const industry = extraction.industry?.trim().toLowerCase() ?? "";
-  if (industry && USABLE_FOR_SAUL_INDUSTRIES.has(industry)) return "usable_for_saul";
-  if (industry && (NOT_USABLE_INDUSTRIES.has(industry) || industry.includes("news")))
-    return "not_usable";
+  if (industry && NOT_USABLE_INDUSTRIES.has(industry)) return "not_usable";
 
   if (extraction.clearance_required?.trim().toLowerCase() === "yes")
     return "not_usable";
@@ -173,22 +163,13 @@ interface ColumnIndices {
   salaryPeriod: number | null;
   // Validation optional columns
   validationStatus: number | null;
-  validationNotes: number | null;
-  confidenceScore: number | null;
-  // Retry optional columns
-  retryCount: number | null;
   lastErrorStage: number | null;
-  nextRetryAt: number | null;
   // Token usage optional column
   tokenUsage: number | null;
 }
 
 let warnedMissingValidationStatusCol = false;
-let warnedMissingValidationNotesCol = false;
-let warnedMissingConfidenceScoreCol = false;
-let warnedMissingRetryCountCol = false;
 let warnedMissingLastErrorStageCol = false;
-let warnedMissingNextRetryAtCol = false;
 let warnedMissingTokenUsageCol = false;
 
 function getColumnIndices(
@@ -220,12 +201,7 @@ function getColumnIndices(
     salaryPeriod: getHeaderIndexOptional(headerRow, "salary_period"),
     // Validation optional columns
     validationStatus: getHeaderIndexOptional(headerRow, "validation_status"),
-    validationNotes: getHeaderIndexOptional(headerRow, "validation_notes"),
-    confidenceScore: getHeaderIndexOptional(headerRow, "confidence_score"),
-    // Retry optional columns
-    retryCount: getHeaderIndexOptional(headerRow, "retry_count"),
     lastErrorStage: getHeaderIndexOptional(headerRow, "last_error_stage"),
-    nextRetryAt: getHeaderIndexOptional(headerRow, "next_retry_at"),
     // Token usage optional column
     tokenUsage: getHeaderIndexOptional(headerRow, "token_usage"),
   };
@@ -369,10 +345,8 @@ function buildSuccessUpdates(
   options?: {
     salaryJson?: string;
     validation?: {
-      finalStatus: "usable" | "usable_for_saul" | "not_usable" | "retry" | "failed";
-      validationStatus: "pass" | "retry" | "failed";
-      validationNotes: string;
-      confidenceScore: number;
+      finalStatus: "usable" | "consider" | "not_usable" | "failed";
+      validationStatus: "pass" | "failed";
     };
   }
 ): SuccessUpdatesResult {
@@ -411,20 +385,6 @@ function buildSuccessUpdates(
       rowNum,
       options.validation.validationStatus
     );
-    if (options.validation.validationNotes) {
-      addOptionalUpdate(
-        updates,
-        cols.validationNotes,
-        rowNum,
-        options.validation.validationNotes
-      );
-    }
-    addOptionalUpdate(
-      updates,
-      cols.confidenceScore,
-      rowNum,
-      options.validation.confidenceScore
-    );
   }
 
   // Legacy optional columns (write if they exist)
@@ -439,7 +399,7 @@ function buildSuccessUpdates(
 function buildFailureUpdates(
   cols: ColumnIndices,
   rowNum: number,
-  status: "retry" | "failed",
+  status: "failed",
   errorMessage: string,
   now: string
 ): { col: number; row: number; value: string | number }[] {
@@ -476,35 +436,11 @@ export async function runExtract(
     );
     warnedMissingValidationStatusCol = true;
   }
-  if (cols.validationNotes === null && !warnedMissingValidationNotesCol) {
-    console.warn(
-      "[EXTRACT] Warning: 'validation_notes' column not found; validation results will not be fully written."
-    );
-    warnedMissingValidationNotesCol = true;
-  }
-  if (cols.confidenceScore === null && !warnedMissingConfidenceScoreCol) {
-    console.warn(
-      "[EXTRACT] Warning: 'confidence_score' column not found; validation results will not be fully written."
-    );
-    warnedMissingConfidenceScoreCol = true;
-  }
-  if (cols.retryCount === null && !warnedMissingRetryCountCol) {
-    console.warn(
-      "[EXTRACT] Warning: 'retry_count' column not found; retry metadata will not be fully written."
-    );
-    warnedMissingRetryCountCol = true;
-  }
   if (cols.lastErrorStage === null && !warnedMissingLastErrorStageCol) {
     console.warn(
-      "[EXTRACT] Warning: 'last_error_stage' column not found; retry metadata will not be fully written."
+      "[EXTRACT] Warning: 'last_error_stage' column not found; error stage metadata will not be written."
     );
     warnedMissingLastErrorStageCol = true;
-  }
-  if (cols.nextRetryAt === null && !warnedMissingNextRetryAtCol) {
-    console.warn(
-      "[EXTRACT] Warning: 'next_retry_at' column not found; retry scheduling will be limited."
-    );
-    warnedMissingNextRetryAtCol = true;
   }
   if (cols.tokenUsage === null && !warnedMissingTokenUsageCol) {
     console.warn(
@@ -651,37 +587,11 @@ export async function runExtract(
       };
       const validationResult = validateExtraction(validationInput);
 
-      const row = grid[sheetRowNum - 1] ?? [];
-      const currentRetryRaw =
-        cols.retryCount !== null ? row[cols.retryCount] : undefined;
-      const currentRetryCount = parseRetryCount(currentRetryRaw);
-
-      let finalRowStatus: "usable" | "usable_for_saul" | "not_usable" | "retry" | "failed";
-      let newRetryCount = currentRetryCount;
-      let nextRetryAt: string | null = null;
+      let finalRowStatus: "usable" | "consider" | "not_usable" | "failed";
       let lastErrorStageValue: string | null = null;
 
       if (validationResult.validation_status === "pass") {
         finalRowStatus = getExtractionStatusForPassedValidation(extraction);
-      } else if (validationResult.validation_status === "retry") {
-        finalRowStatus = "retry";
-        lastErrorStageValue = "validation";
-
-        if (cols.retryCount !== null && cols.nextRetryAt !== null) {
-          if (currentRetryCount >= 3) {
-            finalRowStatus = "failed";
-            nextRetryAt = "";
-            console.log(
-              `[failed] row ${sheetRowNum} exceeded retries stage=validation`
-            );
-          } else {
-            newRetryCount = currentRetryCount + 1;
-            nextRetryAt = computeNextRetryAt(newRetryCount);
-            console.log(
-              `[RETRY] row ${sheetRowNum} retry_count=${newRetryCount} next_retry_at=${nextRetryAt} stage=validation`
-            );
-          }
-        }
       } else {
         finalRowStatus = "failed";
         lastErrorStageValue = "validation";
@@ -692,9 +602,8 @@ export async function runExtract(
           salaryJson,
           validation: {
             finalStatus: finalRowStatus,
-            validationStatus: validationResult.validation_status,
-            validationNotes: validationResult.validation_notes,
-            confidenceScore: validationResult.confidence_score,
+            validationStatus:
+              validationResult.validation_status === "pass" ? "pass" : "failed",
           },
         });
 
@@ -705,35 +614,17 @@ export async function runExtract(
           value: lastErrorStageValue,
         });
       }
-      if (
-        cols.retryCount !== null &&
-        newRetryCount !== currentRetryCount
-      ) {
-        updates.push({
-          col: cols.retryCount,
-          row: sheetRowNum,
-          value: newRetryCount,
-        });
-      }
-      if (cols.nextRetryAt !== null && nextRetryAt !== null) {
-        updates.push({
-          col: cols.nextRetryAt,
-          row: sheetRowNum,
-          value: nextRetryAt,
-        });
-      }
-
       addOptionalUpdate(updates, cols.tokenUsage, sheetRowNum, usage.total_tokens);
 
       allUpdates.push(...updates);
 
       const company = extraction.company_name ?? "Unknown";
       const role = extraction.role_title ?? "Unknown";
-      let logLine = `[EXTRACT] row ${sheetRowNum} ${validationResult.validation_status} -> ${finalRowStatus} score=${validationResult.confidence_score} company=${company} role=${role}`;
-      if (validationResult.validation_notes) {
-        logLine += ` notes=${validationResult.validation_notes}`;
-      }
-      console.log(logLine);
+      const normalizedValidation =
+        validationResult.validation_status === "pass" ? "pass" : "failed";
+      console.log(
+        `[EXTRACT] row ${sheetRowNum} ${normalizedValidation} -> ${finalRowStatus} company=${company} role=${role}`
+      );
 
       if (wroteSalaryJson) {
         console.log(`[EXTRACT] row ${sheetRowNum} wrote salary JSON`);
@@ -743,39 +634,8 @@ export async function runExtract(
       const sheetRowNum = item.sheetRowNum;
       const errMsg =
         reason instanceof Error ? reason.message : String(reason);
-      const isCacheMissing = errMsg.includes("Cache file not found");
-      const classification = isCacheMissing ? "failed" : classifyError(errMsg);
       const message = truncateError(errMsg);
-
-      const row = grid[sheetRowNum - 1] ?? [];
-      const currentRetryRaw =
-        cols.retryCount !== null ? row[cols.retryCount] : undefined;
-      const currentRetryCount = parseRetryCount(currentRetryRaw);
-
-      let newRetryCount = currentRetryCount;
-      let status: "retry" | "failed" = classification;
-      let nextRetryAt: string | null = null;
-
-      if (
-        !isCacheMissing &&
-        classification === "retry" &&
-        cols.retryCount !== null &&
-        cols.nextRetryAt !== null
-      ) {
-        if (currentRetryCount >= 3) {
-          status = "failed";
-          nextRetryAt = "";
-          console.log(
-            `[failed] row ${sheetRowNum} exceeded retries stage=extract_openai`
-          );
-        } else {
-          newRetryCount = currentRetryCount + 1;
-          nextRetryAt = computeNextRetryAt(newRetryCount);
-          console.log(
-            `[RETRY] row ${sheetRowNum} retry_count=${newRetryCount} next_retry_at=${nextRetryAt} stage=extract_openai`
-          );
-        }
-      }
+      const status: "failed" = "failed";
 
       const updates = buildFailureUpdates(
         cols,
@@ -789,23 +649,6 @@ export async function runExtract(
           col: cols.lastErrorStage,
           row: sheetRowNum,
           value: "extract_openai",
-        });
-      }
-      if (
-        cols.retryCount !== null &&
-        newRetryCount !== currentRetryCount
-      ) {
-        updates.push({
-          col: cols.retryCount,
-          row: sheetRowNum,
-          value: newRetryCount,
-        });
-      }
-      if (cols.nextRetryAt !== null && nextRetryAt !== null) {
-        updates.push({
-          col: cols.nextRetryAt,
-          row: sheetRowNum,
-          value: nextRetryAt,
         });
       }
       allUpdates.push(...updates);

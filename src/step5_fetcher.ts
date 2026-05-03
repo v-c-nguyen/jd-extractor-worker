@@ -16,10 +16,8 @@ import {
   isBlockedText,
   getBlockedMessage,
   isTooShort,
-  classifyError,
 } from "./fetch/validate.js";
 import { runWithConcurrency } from "./concurrency.js";
-import { parseRetryCount, computeNextRetryAt } from "./retry.js";
 import { buildPromoteEmptyJobUrlBatch } from "./sheet_promote_new_rows.js";
 
 const POLL_INTERVAL_MS = 30_000;
@@ -74,9 +72,7 @@ function getHeaderIndexOptional(
   return idx === -1 ? null : idx;
 }
 
-let warnedMissingRetryCountCol = false;
 let warnedMissingLastErrorStageCol = false;
-let warnedMissingNextRetryAtCol = false;
 
 function hostnameRequiresPlaywright(url: string): boolean {
   try {
@@ -203,27 +199,12 @@ export async function runFetch(
   );
   const errorMessageIdx = getHeaderIndexOrThrow(headerRow, "error_message");
 
-  const retryCountIdx = getHeaderIndexOptional(headerRow, "retry_count");
   const lastErrorStageIdx = getHeaderIndexOptional(headerRow, "last_error_stage");
-  const nextRetryAtIdx = getHeaderIndexOptional(headerRow, "next_retry_at");
-
-  if (retryCountIdx === null && !warnedMissingRetryCountCol) {
-    console.warn(
-      "[FETCH] Warning: 'retry_count' column not found; retry metadata will not be fully written."
-    );
-    warnedMissingRetryCountCol = true;
-  }
   if (lastErrorStageIdx === null && !warnedMissingLastErrorStageCol) {
     console.warn(
-      "[FETCH] Warning: 'last_error_stage' column not found; retry metadata will not be fully written."
+      "[FETCH] Warning: 'last_error_stage' column not found; error stage metadata will not be written."
     );
     warnedMissingLastErrorStageCol = true;
-  }
-  if (nextRetryAtIdx === null && !warnedMissingNextRetryAtCol) {
-    console.warn(
-      "[FETCH] Warning: 'next_retry_at' column not found; retry scheduling will be limited."
-    );
-    warnedMissingNextRetryAtCol = true;
   }
 
   const { updates: promoteUpdates, promotedRowNums } = buildPromoteEmptyJobUrlBatch(
@@ -324,10 +305,7 @@ export async function runFetch(
     outcome: "error";
     message: string;
     stage: string;
-    status: "retry" | "failed";
-    currentRetryCount: number;
-    newRetryCount: number;
-    nextRetryAt: string | null;
+    status: "failed";
   };
   type FetchRowResult =
     | FetchRowSuccess
@@ -393,33 +371,10 @@ export async function runFetch(
       };
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
-      const classification = classifyError(errMsg);
       const message = truncateError(errMsg);
-      const row = grid[sheetRowNum - 1] ?? [];
-      const currentRetryCount = parseRetryCount(
-        retryCountIdx !== null ? row[retryCountIdx] : undefined
-      );
       const stage = hostnameRequiresPlaywright(url)
         ? "fetch_playwright"
         : "fetch_http";
-
-      let status: "retry" | "failed" = classification;
-      let newRetryCount = currentRetryCount;
-      let nextRetryAt: string | null = null;
-
-      if (
-        classification === "retry" &&
-        retryCountIdx !== null &&
-        nextRetryAtIdx !== null
-      ) {
-        if (currentRetryCount >= 3) {
-          status = "failed";
-          nextRetryAt = "";
-        } else {
-          newRetryCount = currentRetryCount + 1;
-          nextRetryAt = computeNextRetryAt(newRetryCount);
-        }
-      }
 
       return {
         sheetRowNum,
@@ -428,10 +383,7 @@ export async function runFetch(
         outcome: "error",
         message,
         stage,
-        status,
-        currentRetryCount,
-        newRetryCount,
-        nextRetryAt,
+        status: "failed",
       };
     }
   };
@@ -443,12 +395,8 @@ export async function runFetch(
   const rawTextHashLetter = indexToColumnLetter(rawTextHashIdx);
   const lastProcessedLetter = indexToColumnLetter(lastProcessedIdx);
   const errorMessageLetter = indexToColumnLetter(errorMessageIdx);
-  const retryCountLetter =
-    retryCountIdx !== null ? indexToColumnLetter(retryCountIdx) : null;
   const lastErrorStageLetter =
     lastErrorStageIdx !== null ? indexToColumnLetter(lastErrorStageIdx) : null;
-  const nextRetryAtLetter =
-    nextRetryAtIdx !== null ? indexToColumnLetter(nextRetryAtIdx) : null;
 
   const allData: { range: string; values: (string | number)[][] }[] = [];
 
@@ -490,12 +438,6 @@ export async function runFetch(
           values: [[value.stage]],
         });
       }
-      if (nextRetryAtLetter) {
-        allData.push({
-          range: `${sheetTab}!${nextRetryAtLetter}${sheetRowNum}`,
-          values: [[""]],
-        });
-      }
       console.log(
         `[FETCH] row ${sheetRowNum} host=${value.host} failed: ${value.message}`
       );
@@ -512,12 +454,6 @@ export async function runFetch(
         allData.push({
           range: `${sheetTab}!${lastErrorStageLetter}${sheetRowNum}`,
           values: [[value.stage]],
-        });
-      }
-      if (nextRetryAtLetter) {
-        allData.push({
-          range: `${sheetTab}!${nextRetryAtLetter}${sheetRowNum}`,
-          values: [[""]],
         });
       }
       console.log(
@@ -537,27 +473,6 @@ export async function runFetch(
           range: `${sheetTab}!${lastErrorStageLetter}${sheetRowNum}`,
           values: [[value.stage]],
         });
-      }
-      if (retryCountLetter && value.newRetryCount !== value.currentRetryCount) {
-        allData.push({
-          range: `${sheetTab}!${retryCountLetter}${sheetRowNum}`,
-          values: [[value.newRetryCount]],
-        });
-      }
-      if (nextRetryAtLetter) {
-        allData.push({
-          range: `${sheetTab}!${nextRetryAtLetter}${sheetRowNum}`,
-          values: [[value.nextRetryAt ?? ""]],
-        });
-      }
-      if (value.status === "retry") {
-        console.log(
-          `[RETRY] row ${sheetRowNum} retry_count=${value.newRetryCount} next_retry_at=${value.nextRetryAt} stage=${value.stage}`
-        );
-      } else {
-        console.log(
-          `[failed] row ${sheetRowNum} exceeded retries stage=${value.stage}`
-        );
       }
       console.log(`[FETCH] row ${sheetRowNum} host=${value.host} ${value.status}: ${value.message}`);
       continue;

@@ -14,6 +14,7 @@ export type RuleExtraction = Partial<
     | "government_agency"
     | "location"
     | "travel"
+    | "type"
   >
 >;
 
@@ -23,7 +24,8 @@ export type RuleDetectedField =
   | "clearance_required"
   | "government_agency"
   | "location"
-  | "travel";
+  | "travel"
+  | "type";
 
 export interface RuleExtractionResult {
   extraction: RuleExtraction;
@@ -155,6 +157,19 @@ function extractTravel(text: string): string | null {
   return null;
 }
 
+// ----- Type -----
+const TYPE_SALESFORCE =
+  /\b(salesforce|sfdc|sales cloud|service cloud|marketing cloud|experience cloud|apex|lightning|lwc)\b/i;
+const TYPE_SOLUTIONS_ENGINEER =
+  /\b(solution|solutions)\s+(engineer|engineering)\b|\bsales\s+engineer(ing)?\b/i;
+
+function extractType(text: string): JobExtraction["type"] | null {
+  // Salesforce takes precedence because it is more specific.
+  if (TYPE_SALESFORCE.test(text)) return "Salesforce";
+  if (TYPE_SOLUTIONS_ENGINEER.test(text)) return "Solutions Engineer";
+  return null;
+}
+
 // ----- Public API -----
 
 export function extractWithRules(jdText: string): RuleExtractionResult {
@@ -197,6 +212,12 @@ export function extractWithRules(jdText: string): RuleExtractionResult {
     detected.push("travel");
   }
 
+  const type = extractType(jdText);
+  if (type != null) {
+    extraction.type = type;
+    detected.push("type");
+  }
+
   return { extraction, detected };
 }
 
@@ -215,5 +236,6 @@ export function mergeRuleIntoExtraction(
     ...(rule.government_agency !== undefined && { government_agency: rule.government_agency }),
     ...(rule.location !== undefined && { location: rule.location }),
     ...(rule.travel !== undefined && { travel: rule.travel }),
+    ...(rule.type !== undefined && { type: rule.type }),
   };
 }

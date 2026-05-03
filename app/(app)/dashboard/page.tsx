@@ -1,123 +1,82 @@
-import Link from "next/link";
+import type { ReactNode } from "react";
 import { auth } from "@/auth";
+import { AdminDashboardOverview } from "@/components/dashboard/admin-dashboard-overview";
+import { BidderDashboardToday } from "@/components/dashboard/bidder-dashboard-today";
 import { PageHeader } from "@/components/page-header";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { isPathForbiddenForRole } from "@/lib/auth/access-control";
 import { normalizeAppRole } from "@/lib/auth/app-role";
-import {
-  SlidersHorizontal,
-  Users,
-  ContactRound,
-  CalendarClock,
-  Briefcase,
-  FileSpreadsheet,
-  ChevronRight,
-} from "lucide-react";
+import { getUserProfileById } from "@/lib/auth/user-repo";
+import { listBidderPerformanceRows } from "@/lib/bidders/performance-repo";
+import { listBidderWork } from "@/lib/bidders/work-repo";
+import { listInterviewsForDate } from "@/lib/interviews/repo";
+import { isPipelineRunning } from "@/lib/pipeline-runtime";
 import { cn } from "@/lib/utils";
-
-const primaryLinks = [
-  {
-    href: "/job-extractor",
-    title: "Job extractor",
-    description: "Pipeline control and live logs on separate pages.",
-    icon: SlidersHorizontal,
-  },
-  {
-    href: "/bidders",
-    title: "Bidders",
-    description: "Bidder directory, performance metrics, and transaction history.",
-    icon: Users,
-  },
-  {
-    href: "/profiles",
-    title: "Profiles",
-    description: "People profiles with emails, links, and optional link to a registered bidder.",
-    icon: ContactRound,
-  },
-  {
-    href: "/interviews",
-    title: "Interviews",
-    description: "Interview management (coming soon).",
-    icon: CalendarClock,
-  },
-] as const;
-
-const utilityLinks = [
-  { href: "/jobs", title: "Jobs", description: "Browse extracted job postings.", icon: Briefcase },
-  {
-    href: "/settings/sheets",
-    title: "Sheets",
-    description: "Spreadsheet settings.",
-    icon: FileSpreadsheet,
-  },
-] as const;
 
 export default async function DashboardPage() {
   const session = await auth();
   const role = normalizeAppRole(session?.user?.role);
-  const primaryLinksVisible = primaryLinks.filter((item) => !isPathForbiddenForRole(role, item.href));
+
+  const utcToday = new Date().toISOString().slice(0, 10);
+  let adminOverview: ReactNode = null;
+  let bidderOverview: ReactNode = null;
+  if (role === "administrator") {
+    try {
+      const [performance, interviewsToday] = await Promise.all([
+        listBidderPerformanceRows(),
+        listInterviewsForDate(utcToday),
+      ]);
+      adminOverview = (
+        <AdminDashboardOverview
+          pipelineRunning={isPipelineRunning()}
+          utcToday={utcToday}
+          performance={performance}
+          interviewsToday={interviewsToday}
+        />
+      );
+    } catch (err) {
+      console.error("[dashboard] admin overview", err);
+      adminOverview = (
+        <Card className="border-destructive/30 bg-destructive/[0.04] shadow-sm">
+          <CardHeader>
+            <CardTitle className="text-base text-destructive">Administrator overview unavailable</CardTitle>
+            <CardDescription>
+              Could not load status or today&apos;s data. Check the database connection and migrations.
+            </CardDescription>
+          </CardHeader>
+        </Card>
+      );
+    }
+  }
+  if (role === "bidder" && session?.user?.id) {
+    try {
+      const profile = await getUserProfileById(session.user.id);
+      if (profile?.bidderId) {
+        const entries = await listBidderWork(profile.bidderId, utcToday, utcToday);
+        bidderOverview = <BidderDashboardToday utcToday={utcToday} entries={entries} />;
+      }
+    } catch (err) {
+      console.error("[dashboard] bidder today overview", err);
+      bidderOverview = (
+        <Card className="border-destructive/30 bg-destructive/[0.04] shadow-sm">
+          <CardHeader>
+            <CardTitle className="text-base text-destructive">Your today view is unavailable</CardTitle>
+            <CardDescription>Could not load your bidder work for today. Try again shortly.</CardDescription>
+          </CardHeader>
+        </Card>
+      );
+    }
+  }
 
   return (
-    <div className="mx-auto max-w-3xl space-y-8">
+    <div className={cn("mx-auto space-y-8", role === "administrator" ? "max-w-5xl" : "max-w-3xl")}>
       <PageHeader
         eyebrow="Home"
         title="Dashboard"
-        description="Use the top navigation to open each area, or jump in from the shortcuts below."
+        description="Overview of today and system status. Open Job extractor, Interviews, and other areas from the top navigation."
       />
 
-      <div className="space-y-3">
-        <h2 className="text-sm font-medium text-muted-foreground">Sections</h2>
-        <ul className="grid gap-3">
-          {primaryLinksVisible.map((item) => {
-            const Icon = item.icon;
-            return (
-              <li key={item.href}>
-                <Link
-                  href={item.href}
-                  className={cn(
-                    "group flex items-center gap-4 rounded-xl border border-border/80 bg-card p-4 shadow-sm transition-colors",
-                    "hover:border-border hover:bg-accent/30"
-                  )}
-                >
-                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-muted text-foreground">
-                    <Icon className="h-5 w-5" aria-hidden />
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <p className="font-medium text-foreground">{item.title}</p>
-                    <p className="text-sm text-muted-foreground">{item.description}</p>
-                  </div>
-                  <ChevronRight
-                    className="h-5 w-5 shrink-0 text-muted-foreground opacity-60 transition-transform group-hover:translate-x-0.5"
-                    aria-hidden
-                  />
-                </Link>
-              </li>
-            );
-          })}
-        </ul>
-      </div>
-
-      <div className="space-y-3">
-        <h2 className="text-sm font-medium text-muted-foreground">Data & settings</h2>
-        <div className="grid gap-3 sm:grid-cols-2">
-          {utilityLinks.map((item) => {
-            const Icon = item.icon;
-            return (
-              <Card key={item.href} className="shadow-sm transition-colors hover:bg-accent/20">
-                <CardHeader className="pb-3">
-                  <Link href={item.href} className="block rounded-lg outline-none ring-offset-background focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">
-                    <CardTitle className="flex items-center gap-2 text-base">
-                      <Icon className="h-4 w-4 text-muted-foreground" aria-hidden />
-                      {item.title}
-                    </CardTitle>
-                    <CardDescription className="mt-1.5">{item.description}</CardDescription>
-                  </Link>
-                </CardHeader>
-              </Card>
-            );
-          })}
-        </div>
-      </div>
+      {adminOverview}
+      {bidderOverview}
     </div>
   );
 }

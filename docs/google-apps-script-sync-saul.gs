@@ -1,11 +1,14 @@
 /**
- * new_jobs → team sheets (Saul, Jimmy, CNguyen, CSmith, CGlynn, Daniel)
+ * new_jobs → team sheets (Jimmy, CNguyen, CSmith, Andrew, Others, Daniel, Michael) — not Saul or CGlynn.
  *
- * - Rows with status usable (+ usable_for_saul on Saul only) + type in each tab’s allow-list; meta Z = new_jobs row #; C:E = URL/company/type.
+ * - Rows with status usable + type in each tab’s allow-list; meta Z = new_jobs row #; B:F = date/url/company/type/industry. (usable_for_saul is not synced to any tab.)
+ * - Michael: rows whose type column is "Salesforce" (same usable status rules as other tabs).
  * - new_jobs column A = date when job URL (D) is present; cleared when D is empty (UI edit on D or time-driven sync).
  * - URL dedupe (normalized); optional company dedupe (DEDUPE_BY_COMPANY_ON_NEW_JOBS).
  * - Pipeline/API updates do NOT fire onEdit — add a time-driven trigger on
  *   syncAllTeamSheetsFromNewJobs (recommended) or rely on onEdit for manual edits only.
+ * - Team tabs: row 1 headers must include "Status" and "Applied_Time". When Status is set to
+ *   "Applied", script writes the current date-time in Applied_Time once and leaves it unchanged.
  *
  * Setup: paste in Extensions → Apps Script, authorize, run runSyncAllTeamSheetsNow() once,
  * then Triggers → syncAllTeamSheetsFromNewJobs → time-driven (e.g. every 5–10 min).
@@ -18,7 +21,7 @@ var SAUL_DATE_COL = 2;
 var SAUL_URL_COL = 3;
 var SAUL_COMPANY_COL = 4;
 var SAUL_TYPE_COL = 5;
-var SAUL_SYNC_NUM_COLS = 3;
+var SAUL_SYNC_NUM_COLS = 4;
 var SAUL_META_COL = 26;
 
 /** 0-based indices into new_jobs row arrays (getValues) — columns C..F */
@@ -26,6 +29,8 @@ var NJ_STATUS_COL = 2;
 var NJ_JOB_URL_COL = 3;
 var NJ_COMPANY_COL = 4;
 var NJ_TYPE_COL = 5;
+var NJ_DATE_COL = 0;
+var NJ_INDUSTRY_COL = 11;
 var NJ_HEADER_ROWS = 1;
 
 /** 1-based: column A = added-date stamp when job URL (D) is first present */
@@ -39,7 +44,7 @@ var NJ_EDIT_COL_MAX = 6;
 var DEDUPE_BY_COMPANY_ON_NEW_JOBS = true;
 
 /**
- * Job types that sync to Saul, Jimmy, CSmith, and CGlynn (same pool as AI + Full Stack roles).
+ * Job types that sync to Jimmy, CSmith, and Andrew (same pool as AI + Full Stack roles).
  * Do NOT add DevOps or other engineering types to QA_TYPE_LABELS — CNguyen is QA-only.
  */
 var ENGINEERING_TYPE_LABELS = [
@@ -59,7 +64,11 @@ var ENGINEERING_TYPE_LABELS = [
 var QA_TYPE_LABELS = ["QA"];
 
 /** Daniel only — tech support / solutions roles; not mixed into engineering tabs. */
-var DANIEL_TYPE_LABELS = ["Tech Support or Solutions"];
+var DANIEL_TYPE_LABELS = ["Tech Support or Solutions", "Solutions Engineer"];
+
+/** Michael only — Salesforce roles (type on new_jobs must match, case/spacing normalized). */
+var MICHAEL_TYPE_LABELS = ["Salesforce"];
+var OTHERS_EXCLUDED_INDUSTRY_LABELS = ["Software/SaaS", "AI/ML"];
 
 function normalizeTypeForFilter(s) {
   return String(s || "")
@@ -83,6 +92,10 @@ function buildAllowedTypesSet(labels) {
 var ENGINEERING_TYPES_SET = buildAllowedTypesSet(ENGINEERING_TYPE_LABELS);
 var QA_TYPES_SET = buildAllowedTypesSet(QA_TYPE_LABELS);
 var DANIEL_TYPES_SET = buildAllowedTypesSet(DANIEL_TYPE_LABELS);
+var MICHAEL_TYPES_SET = buildAllowedTypesSet(MICHAEL_TYPE_LABELS);
+var OTHERS_EXCLUDED_INDUSTRIES_SET = buildAllowedTypesSet(
+  OTHERS_EXCLUDED_INDUSTRY_LABELS
+);
 var ALL_ALLOWED_TYPES_SET = (function () {
   var s = new Set();
   ENGINEERING_TYPES_SET.forEach(function (v) {
@@ -94,20 +107,25 @@ var ALL_ALLOWED_TYPES_SET = (function () {
   DANIEL_TYPES_SET.forEach(function (v) {
     s.add(v);
   });
+  MICHAEL_TYPES_SET.forEach(function (v) {
+    s.add(v);
+  });
   return s;
 })();
 
 var TEAM_SHEET_CONFIG = [
-  {
-    sheetName: "Saul",
-    allowedTypes: ENGINEERING_TYPES_SET,
-    allowUsableForSaulStatus: true,
-  },
   { sheetName: "Jimmy", allowedTypes: ENGINEERING_TYPES_SET },
   { sheetName: "CNguyen", allowedTypes: QA_TYPES_SET /* QA only — not AI/FullStack/DevOps */ },
   { sheetName: "CSmith", allowedTypes: ENGINEERING_TYPES_SET },
-  { sheetName: "CGlynn", allowedTypes: ENGINEERING_TYPES_SET },
+  { sheetName: "Andrew", allowedTypes: ENGINEERING_TYPES_SET },
+  {
+    sheetName: "Others",
+    allowedTypes: ENGINEERING_TYPES_SET,
+    excludedIndustries: OTHERS_EXCLUDED_INDUSTRIES_SET,
+    forceFullRewrite: true,
+  },
   { sheetName: "Daniel", allowedTypes: DANIEL_TYPES_SET },
+  { sheetName: "Michael", allowedTypes: MICHAEL_TYPES_SET },
 ];
 
 function getCanonicalJobUrl(richCell, plainFromValues) {
@@ -205,12 +223,20 @@ function parseMetaNjRow(cell) {
   return isNaN(n) ? NaN : n;
 }
 
-function tripleEqual(a, b) {
-  return (
-    String(a[0] || "").trim() === String(b[0] || "").trim() &&
-    String(a[1] || "").trim() === String(b[1] || "").trim() &&
-    String(a[2] || "").trim() === String(b[2] || "").trim()
-  );
+function valuesEqual(a, b) {
+  if (!a || !b || a.length !== b.length) return false;
+  for (var i = 0; i < a.length; i++) {
+    var av = a[i];
+    var bv = b[i];
+    if (av instanceof Date || bv instanceof Date) {
+      var at = av instanceof Date ? av.getTime() : NaN;
+      var bt = bv instanceof Date ? bv.getTime() : NaN;
+      if (at !== bt) return false;
+      continue;
+    }
+    if (String(av || "").trim() !== String(bv || "").trim()) return false;
+  }
+  return true;
 }
 
 function saulDateTodayOrEmpty(spreadsheet, urlCellValue) {
@@ -237,6 +263,65 @@ function rangeIntersectsColumn1Based(range, col1Based) {
   var c0 = range.getColumn();
   var c1 = c0 + range.getNumColumns() - 1;
   return c0 <= col1Based && c1 >= col1Based;
+}
+
+/** Match header row labels: "Applied_Time", "Applied Time", etc. */
+function normalizeTeamSheetHeaderName(h) {
+  return String(h || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "_");
+}
+
+/** 1-based column index from row-1 header, or -1 if missing. */
+function findTeamSheetHeaderColumn(sheet, normalizedName) {
+  var lastCol = sheet.getLastColumn();
+  if (lastCol < 1) return -1;
+  var headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+  for (var c = 0; c < headers.length; c++) {
+    if (normalizeTeamSheetHeaderName(headers[c]) === normalizedName) return c + 1;
+  }
+  return -1;
+}
+
+function isTeamTrackingSheetName(sheetName) {
+  for (var i = 0; i < TEAM_SHEET_CONFIG.length; i++) {
+    if (TEAM_SHEET_CONFIG[i].sheetName === sheetName) return true;
+  }
+  return false;
+}
+
+function isTeamAppliedTimeCellEmpty(cellValue) {
+  if (cellValue === null || cellValue === undefined) return true;
+  if (cellValue instanceof Date) return isNaN(cellValue.getTime());
+  return String(cellValue).trim() === "";
+}
+
+/**
+ * When Status becomes "Applied", set Applied_Time to now if that cell is still empty (sticky).
+ * Headers in row 1: Status, Applied_Time (names normalized; see normalizeTeamSheetHeaderName).
+ */
+function maybeStampAppliedTimeOnTeamSheetEdit(sheet, range) {
+  var statusCol = findTeamSheetHeaderColumn(sheet, "status");
+  var appliedTimeCol = findTeamSheetHeaderColumn(sheet, "applied_time");
+  if (statusCol < 1 || appliedTimeCol < 1) return;
+  if (!rangeIntersectsColumn1Based(range, statusCol)) return;
+
+  var rowStart = range.getRow();
+  var rowEnd = rowStart + range.getNumRows() - 1;
+  if (rowStart < SAUL_DATA_START_ROW) rowStart = SAUL_DATA_START_ROW;
+  var lastRow = sheet.getLastRow();
+  if (rowEnd > lastRow) rowEnd = lastRow;
+
+  for (var r = rowStart; r <= rowEnd; r++) {
+    var statusVal = String(sheet.getRange(r, statusCol).getValue() || "")
+      .trim()
+      .toLowerCase();
+    if (statusVal !== "applied") continue;
+    var existing = sheet.getRange(r, appliedTimeCol).getValue();
+    if (!isTeamAppliedTimeCellEmpty(existing)) continue;
+    sheet.getRange(r, appliedTimeCol).setValue(new Date());
+  }
 }
 
 /** Keep new_jobs column A in sync with D: date when URL present (first time only); empty when D has no URL. */
@@ -285,10 +370,11 @@ function dateKeyForSaulCounter(dateValue, timezone) {
   return s || "";
 }
 
-function writeSaulJobRow(target, rowNum, njRow, triple) {
+function writeSaulJobRow(target, rowNum, njRow, rowData) {
+  target.getRange(rowNum, SAUL_DATE_COL).setValue(rowData[0]);
   target
     .getRange(rowNum, SAUL_URL_COL, 1, SAUL_SYNC_NUM_COLS)
-    .setValues([triple]);
+    .setValues([[rowData[1], rowData[2], rowData[3], rowData[4]]]);
   target.getRange(rowNum, SAUL_META_COL).setValue(njRow);
 }
 
@@ -330,16 +416,12 @@ function reorderSaulRowsToMatchNewJobsOrder(spreadsheet, target, orderedNjRows, 
   var tz = spreadsheet.getSpreadsheetTimeZone();
   for (var p = 0; p < nWant; p++) {
     var nj = orderedNjRows[p];
-    var trip = desired.get(nj);
+    var rowData = desired.get(nj);
     var rowOut = njToFullRow.has(nj)
       ? njToFullRow.get(nj).slice()
       : [];
     while (rowOut.length < lastCol) rowOut.push("");
-    var dateValue = preserveSaulDateOrSetToday(
-      spreadsheet,
-      trip[0],
-      rowOut[SAUL_DATE_COL - 1]
-    );
+    var dateValue = rowData[0];
     rowOut[SAUL_DATE_COL - 1] = dateValue;
     var dateKey = dateKeyForSaulCounter(dateValue, tz);
     if (dateKey) {
@@ -349,9 +431,10 @@ function reorderSaulRowsToMatchNewJobsOrder(spreadsheet, target, orderedNjRows, 
     } else {
       rowOut[SAUL_NO_COL - 1] = "";
     }
-    rowOut[SAUL_URL_COL - 1] = trip[0];
-    rowOut[SAUL_COMPANY_COL - 1] = trip[1];
-    rowOut[SAUL_TYPE_COL - 1] = trip[2];
+    rowOut[SAUL_URL_COL - 1] = rowData[1];
+    rowOut[SAUL_COMPANY_COL - 1] = rowData[2];
+    rowOut[SAUL_TYPE_COL - 1] = rowData[3];
+    rowOut[SAUL_TYPE_COL] = rowData[4];
     rowOut[SAUL_META_COL - 1] = nj;
     out.push(rowOut);
   }
@@ -369,6 +452,7 @@ function reorderSaulRowsToMatchNewJobsOrder(spreadsheet, target, orderedNjRows, 
 function buildDesiredFromNewJobs(srcData, srcRichUrls, allowedTypesSet, options) {
   options = options || {};
   var allowUsableForSaul = options.allowUsableForSaulStatus === true;
+  var excludedIndustriesSet = options.excludedIndustriesSet || null;
   var desired = new Map();
   var orderedNjRows = [];
   var seenUrlKeys = new Set();
@@ -380,11 +464,15 @@ function buildDesiredFromNewJobs(srcData, srcRichUrls, allowedTypesSet, options)
       .toLowerCase()
       .trim();
     var typeNorm = normalizeTypeForFilter(row[NJ_TYPE_COL]);
+    var industryNorm = normalizeTypeForFilter(row[NJ_INDUSTRY_COL]);
     var jobUrl = getCanonicalJobUrl(srcRichUrls[i][0], row[NJ_JOB_URL_COL]);
     var statusOk =
       status === "usable" ||
       (allowUsableForSaul && status === "usable_for_saul");
-    if (!jobUrl || !statusOk || !allowedTypesSet.has(typeNorm)) continue;
+    var industryExcluded =
+      excludedIndustriesSet && excludedIndustriesSet.has(industryNorm);
+    if (!jobUrl || !statusOk || !allowedTypesSet.has(typeNorm) || industryExcluded)
+      continue;
     var urlKey = normalizeJobUrlForDedupe(jobUrl);
     if (!urlKey || seenUrlKeys.has(urlKey)) continue;
     var companyKey = normalizeCompanyForDedupe(row[NJ_COMPANY_COL]);
@@ -404,7 +492,13 @@ function buildDesiredFromNewJobs(srcData, srcRichUrls, allowedTypesSet, options)
     }
     seenUrlKeys.add(urlKey);
     if (companyKey) seenCompanyKeys.add(companyKey);
-    desired.set(njRow, [jobUrl, row[NJ_COMPANY_COL], row[NJ_TYPE_COL]]);
+    desired.set(njRow, [
+      row[NJ_DATE_COL],
+      jobUrl,
+      row[NJ_COMPANY_COL],
+      row[NJ_TYPE_COL],
+      row[NJ_INDUSTRY_COL],
+    ]);
     orderedNjRows.push(njRow);
   }
   return { desired: desired, orderedNjRows: orderedNjRows };
@@ -459,6 +553,9 @@ function syncOneTargetSheet(spreadsheet, target, desired, orderedNjRows) {
 
   if (tLastRow >= SAUL_DATA_START_ROW) {
     var numDataRows = tLastRow - SAUL_DATA_START_ROW + 1;
+    var oldDates = target
+      .getRange(SAUL_DATA_START_ROW, SAUL_DATE_COL, numDataRows, 1)
+      .getValues();
     var oldVals = target
       .getRange(
         SAUL_DATA_START_ROW,
@@ -478,12 +575,18 @@ function syncOneTargetSheet(spreadsheet, target, desired, orderedNjRows) {
       var rowNum = SAUL_DATA_START_ROW + j;
       var url = getCanonicalJobUrl(oldRichUrls[j][0], oldVals[j][0]);
       var metaNj = parseMetaNjRow(metaVals[j][0]);
-      var vals3 = [url, oldVals[j][1], oldVals[j][2]];
+      var vals = [
+        oldDates[j][0],
+        url,
+        oldVals[j][1],
+        oldVals[j][2],
+        oldVals[j][3],
+      ];
 
       if (!isNaN(metaNj) && metaNj > 0 && desired.has(metaNj)) {
-        oldByNjRow.set(metaNj, { rowNum: rowNum, values: vals3 });
+        oldByNjRow.set(metaNj, { rowNum: rowNum, values: vals });
       } else if (url) {
-        legacyRows.push({ rowNum: rowNum, values: vals3 });
+        legacyRows.push({ rowNum: rowNum, values: vals });
       }
     }
   }
@@ -504,10 +607,9 @@ function syncOneTargetSheet(spreadsheet, target, desired, orderedNjRows) {
   for (var p = 0; p < pairN; p++) {
     var nj = unmatchedDesiredNj[p];
     var leg = legacyRows[p];
-    var tripleP = desired.get(nj);
-    writeSaulJobRow(target, leg.rowNum, nj, tripleP);
-    target.getRange(leg.rowNum, SAUL_DATE_COL).setValue("");
-    oldByNjRow.set(nj, { rowNum: leg.rowNum, values: tripleP });
+    var rowDataP = desired.get(nj);
+    writeSaulJobRow(target, leg.rowNum, nj, rowDataP);
+    oldByNjRow.set(nj, { rowNum: leg.rowNum, values: rowDataP });
     claimedNj.add(nj);
   }
 
@@ -539,6 +641,9 @@ function syncOneTargetSheet(spreadsheet, target, desired, orderedNjRows) {
   tLastRow = target.getLastRow();
   if (tLastRow >= SAUL_DATA_START_ROW) {
     numDataRows = tLastRow - SAUL_DATA_START_ROW + 1;
+    oldDates = target
+      .getRange(SAUL_DATA_START_ROW, SAUL_DATE_COL, numDataRows, 1)
+      .getValues();
     oldVals = target
       .getRange(
         SAUL_DATA_START_ROW,
@@ -558,18 +663,24 @@ function syncOneTargetSheet(spreadsheet, target, desired, orderedNjRows) {
       var rowNum2 = SAUL_DATA_START_ROW + j2;
       var url2 = getCanonicalJobUrl(oldRichUrls[j2][0], oldVals[j2][0]);
       var metaNj2 = parseMetaNjRow(metaVals[j2][0]);
-      var vals32 = [url2, oldVals[j2][1], oldVals[j2][2]];
+      var vals32 = [
+        oldDates[j2][0],
+        url2,
+        oldVals[j2][1],
+        oldVals[j2][2],
+        oldVals[j2][3],
+      ];
       if (!isNaN(metaNj2) && metaNj2 > 0 && desired.has(metaNj2)) {
         oldByNjRow.set(metaNj2, { rowNum: rowNum2, values: vals32 });
       }
     }
   }
 
-  desired.forEach(function (newTriple, nj) {
+  desired.forEach(function (newRowData, nj) {
     if (!oldByNjRow.has(nj)) return;
     var oldEntry = oldByNjRow.get(nj);
-    if (!tripleEqual(oldEntry.values, newTriple)) {
-      writeSaulJobRow(target, oldEntry.rowNum, nj, newTriple);
+    if (!valuesEqual(oldEntry.values, newRowData)) {
+      writeSaulJobRow(target, oldEntry.rowNum, nj, newRowData);
     } else {
       target.getRange(oldEntry.rowNum, SAUL_META_COL).setValue(nj);
     }
@@ -579,7 +690,6 @@ function syncOneTargetSheet(spreadsheet, target, desired, orderedNjRows) {
     var njAdd = njToAppend[r];
     var startRow = target.getLastRow() + 1;
     writeSaulJobRow(target, startRow, njAdd, desired.get(njAdd));
-    target.getRange(startRow, SAUL_DATE_COL).setValue("");
   }
 
   reorderSaulRowsToMatchNewJobsOrder(
@@ -631,8 +741,16 @@ function syncAllTeamSheetsFromNewJobs() {
         srcData,
         srcRichUrls,
         cfg.allowedTypes,
-        { allowUsableForSaulStatus: cfg.allowUsableForSaulStatus === true }
+        {
+          allowUsableForSaulStatus: cfg.allowUsableForSaulStatus === true,
+          excludedIndustriesSet: cfg.excludedIndustries || null,
+        }
       );
+      if (cfg.forceFullRewrite === true) {
+        // Keep Others aligned to the same payload columns as other team tabs
+        // while applying only its distinct filter condition.
+        deleteAllSaulDataRows(target);
+      }
       syncOneTargetSheet(ss, target, built.desired, built.orderedNjRows);
     }
   } finally {
@@ -640,13 +758,23 @@ function syncAllTeamSheetsFromNewJobs() {
   }
 }
 
-/** Manual edits on new_jobs; column D updates stamp A when URL first appears. Use a time trigger for API/pipeline updates. */
+/**
+ * Manual edits: new_jobs column D updates stamp A when URL first appears; C–F edits sync team tabs.
+ * Team tabs (Jimmy, CNguyen, …): editing Status to "Applied" stamps Applied_Time once.
+ */
 function onEdit(e) {
   try {
     if (!e || !e.range || !e.source) return;
-    if (e.range.getSheet().getName() !== "new_jobs") return;
     var sheet = e.range.getSheet();
+    var name = sheet.getName();
     var ss = e.source;
+
+    if (isTeamTrackingSheetName(name)) {
+      maybeStampAppliedTimeOnTeamSheetEdit(sheet, e.range);
+      return;
+    }
+
+    if (name !== "new_jobs") return;
     var urlCol1Based = NJ_JOB_URL_COL + 1;
     if (rangeIntersectsColumn1Based(e.range, urlCol1Based)) {
       var r0 = e.range.getRow();
