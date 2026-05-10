@@ -48,6 +48,8 @@ type ProfileListRow = {
   country: string;
   status: string;
   field: string;
+  industry: string;
+  phone_number: string;
   linkedin: string;
   github: string;
   address: string;
@@ -73,6 +75,8 @@ function mapListRow(row: ProfileListRow): Profile {
     country: row.country,
     status: row.status,
     field: row.field,
+    industry: row.industry ?? "",
+    phoneNumber: row.phone_number ?? "",
     linkedin: row.linkedin,
     github: row.github,
     address: row.address,
@@ -97,6 +101,8 @@ function mapDetailRow(row: ProfileDetailRow, attachments: ProfileAttachmentMeta[
     country: row.country,
     status: row.status,
     field: row.field,
+    industry: row.industry ?? "",
+    phoneNumber: row.phone_number ?? "",
     linkedin: row.linkedin,
     github: row.github,
     address: row.address,
@@ -121,6 +127,8 @@ const listSelect = `
     p.country,
     p.status,
     p.field,
+    p.industry,
+    p.phone_number,
     p.linkedin,
     p.github,
     p.address,
@@ -154,6 +162,8 @@ const profileDetailSelect = `
     p.country,
     p.status,
     p.field,
+    p.industry,
+    p.phone_number,
     p.linkedin,
     p.github,
     p.address,
@@ -194,6 +204,8 @@ export async function listProfiles(search?: string): Promise<Profile[]> {
       OR p.country ILIKE '%' || ${q} || '%'
       OR p.status ILIKE '%' || ${q} || '%'
       OR p.field ILIKE '%' || ${q} || '%'
+      OR p.industry ILIKE '%' || ${q} || '%'
+      OR p.phone_number ILIKE '%' || ${q} || '%'
       OR COALESCE(b.name, '') ILIKE '%' || ${q} || '%'
       OR p.additional_information ILIKE '%' || ${q} || '%'
       OR (p.date_of_birth IS NOT NULL AND p.date_of_birth::text ILIKE '%' || ${q} || '%')
@@ -312,7 +324,7 @@ export async function createProfile(input: CreateProfileInput): Promise<Profile>
   const sql = getSql();
   const inserted = (await sql`
     INSERT INTO profiles (
-      name, country, status, field, linkedin, github, address, bidder_id, note,
+      name, country, status, field, industry, phone_number, linkedin, github, address, bidder_id, note,
       date_of_birth,
       ssn_number, dl_number, additional_information
     )
@@ -321,6 +333,8 @@ export async function createProfile(input: CreateProfileInput): Promise<Profile>
       ${input.country},
       ${input.status},
       ${input.field},
+      ${input.industry},
+      ${input.phoneNumber},
       ${input.linkedin},
       ${input.github},
       ${input.address},
@@ -364,6 +378,9 @@ export async function updateProfile(id: string, patch: PatchProfileInput): Promi
     country: patch.country !== undefined ? patch.country : existing.country,
     status: patch.status !== undefined ? patch.status : existing.status,
     field: patch.field !== undefined ? patch.field : existing.field,
+    industry: patch.industry !== undefined ? patch.industry : existing.industry,
+    phone_number:
+      patch.phoneNumber !== undefined ? patch.phoneNumber : existing.phoneNumber,
     linkedin: patch.linkedin !== undefined ? patch.linkedin : existing.linkedin,
     github: patch.github !== undefined ? patch.github : existing.github,
     address: patch.address !== undefined ? patch.address : existing.address,
@@ -390,6 +407,8 @@ export async function updateProfile(id: string, patch: PatchProfileInput): Promi
     patch.country !== undefined ||
     patch.status !== undefined ||
     patch.field !== undefined ||
+    patch.industry !== undefined ||
+    patch.phoneNumber !== undefined ||
     patch.linkedin !== undefined ||
     patch.github !== undefined ||
     patch.address !== undefined ||
@@ -408,6 +427,8 @@ export async function updateProfile(id: string, patch: PatchProfileInput): Promi
         country = ${merged.country},
         status = ${merged.status},
         field = ${merged.field},
+        industry = ${merged.industry},
+        phone_number = ${merged.phone_number},
         linkedin = ${merged.linkedin},
         github = ${merged.github},
         address = ${merged.address},

@@ -25,6 +25,7 @@ Rules:
 - Salary must be numeric only (no currency symbols or commas).
 
 Field guidance:
+- role_title: Extract the hiring title first; it takes priority over incidental keywords elsewhere in the JD when fields conflict (especially type).
 - location: US-only flag -> "yes" or "no"; null if unclear.
 - industry: choose exactly one (exact string):
   "Software/SaaS", "Cybersecurity", "AI/ML", "IT Services", "Telecom", "E-commerce", "Retail", "Consumer Electronics", "Ad/MarTech", "Media/News/Publishing", "Gaming", "Banking/Financial Services", "Fintech", "Insurance", "Investment/Asset Mgmt", "Professional Services", "Healthcare Providers", "HealthTech", "Biotech/Pharma", "Med Devices/Equipment", "Manufacturing", "Automotive/Mobility", "Aerospace/Defense", "Energy/Utilities", "Construction/Engineering", "Logistics/Transportation", "Supply Chain/Ops Tech", "Travel/Hospitality", "Real Estate", "PropTech", "Government/Public Sector", "Education/EdTech", "Non-Profit/NGO", "Security (Physical/National)".
@@ -33,7 +34,7 @@ Field guidance:
 - travel: use "%", "occasional", "not required", or "not mentioned"; null only if truly unknown.
 - clearance_required: "yes" if security clearance is required, else "no", null if unclear.
 - government_agency: "yes" if employer is government or role clearly supports a named government agency; else "no"; null if unclear.
-- type: choose exactly one allowed type; prefer the single best fit.
+- type: choose exactly one allowed type; prefer the single best fit. Infer primarily from role_title, then from the rest of the JD. If role_title clearly indicates Full Stack / full-stack / fullstack (e.g. engineer or developer), pick the best-matching "FullStack - *" using stack signals in the title or JD (language/framework). Do NOT set type to "Salesforce" or "Solutions Engineer" only because the body mentions Salesforce, Apex, Lightning, integrations, etc., when role_title is a Full Stack role. Use "Data Engineer" when the role is data engineering (ETL, pipelines, warehousing, etc.).
 - seniority: choose one of "Staff", "Lead", "Principal", "Senior", "Normal"; use "Normal" when level is not explicit but role is otherwise standard.
 `;
 

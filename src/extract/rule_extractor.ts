@@ -163,6 +163,12 @@ const TYPE_SALESFORCE =
 const TYPE_SOLUTIONS_ENGINEER =
   /\b(solution|solutions)\s+(engineer|engineering)\b|\bsales\s+engineer(ing)?\b/i;
 
+/** True when the hiring title indicates a full-stack engineering role (body keywords must not override). */
+export function roleTitleSuggestsFullStack(roleTitle: string | null): boolean {
+  if (roleTitle == null || roleTitle.trim() === "") return false;
+  return /\b(full\s*[-–]?\s*stack|fullstack)\b/i.test(roleTitle);
+}
+
 function extractType(text: string): JobExtraction["type"] | null {
   // Salesforce takes precedence because it is more specific.
   if (TYPE_SALESFORCE.test(text)) return "Salesforce";
@@ -226,6 +232,11 @@ export function mergeRuleIntoExtraction(
   openAI: JobExtraction,
   rule: RuleExtraction
 ): JobExtraction {
+  const skipKeywordTypeRule =
+    rule.type !== undefined &&
+    roleTitleSuggestsFullStack(openAI.role_title) &&
+    (rule.type === "Salesforce" || rule.type === "Solutions Engineer");
+
   return {
     ...openAI,
     ...(rule.salary_min !== undefined && { salary_min: rule.salary_min }),
@@ -236,6 +247,6 @@ export function mergeRuleIntoExtraction(
     ...(rule.government_agency !== undefined && { government_agency: rule.government_agency }),
     ...(rule.location !== undefined && { location: rule.location }),
     ...(rule.travel !== undefined && { travel: rule.travel }),
-    ...(rule.type !== undefined && { type: rule.type }),
+    ...(rule.type !== undefined && !skipKeywordTypeRule && { type: rule.type }),
   };
 }

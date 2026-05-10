@@ -79,6 +79,7 @@ export const JobTypeEnum = z.enum([
   "Tech Support or Solutions",
   "Solutions Engineer",
   "Salesforce",
+  "Data Engineer",
 ]);
 
 /** Seniority level; choose the best match from the list. */
@@ -174,6 +175,7 @@ export const JSON_SCHEMA_FOR_OPENAI = {
           "Tech Support or Solutions",
           "Solutions Engineer",
           "Salesforce",
+          "Data Engineer",
           null,
         ],
       },

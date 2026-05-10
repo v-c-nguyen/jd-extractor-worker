@@ -19,6 +19,9 @@ export type Profile = {
   country: string;
   status: string;
   field: string;
+  /** Industry vertical (see profiles UI preset list). */
+  industry: string;
+  phoneNumber: string;
   linkedin: string;
   github: string;
   address: string;

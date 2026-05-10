@@ -33,6 +33,8 @@ import {
   UserCircle,
   Eye,
   X,
+  Phone,
+  Factory,
 } from "lucide-react";
 
 const textareaClass = cn(
@@ -108,6 +110,21 @@ const PROFILE_COUNTRY_OPTIONS = ["United States", "Philippines", "Latam", "EU", 
 const PROFILE_STATUS_OPTIONS = ["In Use", "Ready to Use", "Not Ready", "Other"] as const;
 const PROFILE_FIELD_OPTIONS = ["FullStack", "AI/ML", "QA", "Other"] as const;
 
+const PROFILE_INDUSTRY_OPTIONS = [
+  "SaaS",
+  "Education/EdTech",
+  "Media/News/Publishing",
+  "Gaming",
+  "E-commerce",
+  "Logistics/Transportation",
+  "Travel/Hospitality",
+  "Real Estate",
+  "Healthcare",
+  "Finance",
+  "Government",
+  "Other",
+] as const;
+
 const OTHER_OPTION = "Other";
 
 function splitPresetOther(
@@ -139,6 +156,9 @@ type FormState = {
   statusOther: string;
   fieldPreset: string;
   fieldOther: string;
+  industryPreset: string;
+  industryOther: string;
+  phoneNumber: string;
   linkedin: string;
   github: string;
   address: string;
@@ -160,6 +180,9 @@ function emptyForm(): FormState {
     statusOther: "",
     fieldPreset: PROFILE_FIELD_OPTIONS[0],
     fieldOther: "",
+    industryPreset: "",
+    industryOther: "",
+    phoneNumber: "",
     linkedin: "",
     github: "",
     address: "",
@@ -209,6 +232,25 @@ function groupProfilesSorted(profiles: Profile[], by: ProfilesGroupBy): { label:
   return entries;
 }
 
+function profileCompletionSummary(p: Profile): { filled: number; total: number; missing: string[] } {
+  const checks: Array<[label: string, value: boolean]> = [
+    ["Country", Boolean(p.country?.trim())],
+    ["Status", Boolean(p.status?.trim())],
+    ["Field", Boolean(p.field?.trim())],
+    ["Industry", Boolean(p.industry?.trim())],
+    ["Phone", Boolean(p.phoneNumber?.trim())],
+    ["Email", p.emails.some((e) => Boolean(e.value?.trim()))],
+    ["LinkedIn", Boolean(p.linkedin?.trim())],
+    ["GitHub", Boolean(p.github?.trim())],
+  ];
+  const missing = checks.filter(([, ok]) => !ok).map(([label]) => label);
+  return {
+    filled: checks.length - missing.length,
+    total: checks.length,
+    missing,
+  };
+}
+
 function ProfileCard({
   p,
   onView,
@@ -221,6 +263,15 @@ function ProfileCard({
   onRemove: (p: Profile) => void;
 }) {
   const dobDisplay = p.dateOfBirth?.trim() ? formatDobForDisplay(p.dateOfBirth) : null;
+  const completion = profileCompletionSummary(p);
+  const missingPreview = completion.missing.slice(0, 3);
+  const moreMissing = completion.missing.length - missingPreview.length;
+  const completionToneClass =
+    completion.missing.length === 0
+      ? "bg-emerald-500/15 text-emerald-700 ring-emerald-500/30 dark:text-emerald-300"
+      : completion.missing.length <= 2
+        ? "bg-amber-500/15 text-amber-700 ring-amber-500/30 dark:text-amber-300"
+        : "bg-rose-500/15 text-rose-700 ring-rose-500/30 dark:text-rose-300";
   return (
     <Card className="flex h-full flex-col overflow-hidden border-border/80 shadow-sm transition-shadow hover:shadow-md">
       <CardHeader className="space-y-3 border-b border-border/50 bg-muted/20 pb-4">
@@ -245,6 +296,14 @@ function ProfileCard({
               </span>
             </CardDescription>
           </div>
+          <div className="flex shrink-0 flex-col items-end gap-1.5 pt-0.5">
+            <Badge className="max-w-[8.5rem] truncate bg-sky-500/15 text-sky-700 ring-1 ring-inset ring-sky-500/30 dark:text-sky-300">
+              {p.field?.trim() ? p.field : "No field"}
+            </Badge>
+            <Badge className="max-w-[8.5rem] truncate bg-violet-500/15 text-violet-700 ring-1 ring-inset ring-violet-500/30 dark:text-violet-300">
+              {p.industry?.trim() ? p.industry : "No industry"}
+            </Badge>
+          </div>
         </div>
       </CardHeader>
       <CardContent className="flex flex-1 flex-col gap-3.5 pt-4 text-sm">
@@ -260,6 +319,28 @@ function ProfileCard({
             <span className="text-muted-foreground">—</span>
           )}
         </div>
+        <div className="space-y-2 rounded-lg border border-border/60 bg-muted/15 p-2.5">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Profile</span>
+            <Badge className={cn("ring-1 ring-inset", completionToneClass)}>
+              {completion.missing.length === 0 ? "Complete" : `${completion.filled}/${completion.total}`}
+            </Badge>
+          </div>
+          {completion.missing.length > 0 ? (
+            <div className="flex flex-wrap gap-1.5">
+              {missingPreview.map((label) => (
+                <Badge key={label} variant="outline" className="border-border/80 text-[11px] font-medium">
+                  {label}
+                </Badge>
+              ))}
+              {moreMissing > 0 ? (
+                <Badge variant="outline" className="border-border/80 text-[11px] font-medium">
+                  +{moreMissing}
+                </Badge>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
         <dl className="grid gap-3 text-muted-foreground">
           <div className="flex gap-2.5">
             <MapPin className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground/80" aria-hidden />
@@ -269,10 +350,10 @@ function ProfileCard({
             </div>
           </div>
           <div className="flex gap-2.5">
-            <Briefcase className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground/80" aria-hidden />
+            <Phone className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground/80" aria-hidden />
             <div className="min-w-0 flex-1">
-              <dt className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/90">Field</dt>
-              <dd className="mt-0.5 font-medium text-foreground">{p.field || "—"}</dd>
+              <dt className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/90">Phone</dt>
+              <dd className="mt-0.5 font-medium text-foreground">{p.phoneNumber?.trim() ? p.phoneNumber : "—"}</dd>
             </div>
           </div>
         </dl>
@@ -303,6 +384,10 @@ function profileToForm(p: Profile): FormState {
   const c = splitPresetOther(p.country, PROFILE_COUNTRY_OPTIONS);
   const st = splitPresetOther(p.status, PROFILE_STATUS_OPTIONS);
   const fi = splitPresetOther(p.field, PROFILE_FIELD_OPTIONS);
+  const ind =
+    !p.industry?.trim()
+      ? { preset: "", other: "" }
+      : splitPresetOther(p.industry, PROFILE_INDUSTRY_OPTIONS);
   return {
     name: p.name,
     dateOfBirth: p.dateOfBirth?.trim() ?? "",
@@ -312,6 +397,9 @@ function profileToForm(p: Profile): FormState {
     statusOther: st.other,
     fieldPreset: fi.preset,
     fieldOther: fi.other,
+    industryPreset: ind.preset,
+    industryOther: ind.other,
+    phoneNumber: p.phoneNumber ?? "",
     linkedin: p.linkedin,
     github: p.github,
     address: p.address,
@@ -541,6 +629,10 @@ export function ProfilesManager() {
     const country = resolvedChoice(form.countryPreset, form.countryOther);
     const status = resolvedChoice(form.statusPreset, form.statusOther);
     const field = resolvedChoice(form.fieldPreset, form.fieldOther);
+    const industry =
+      form.industryPreset === ""
+        ? ""
+        : resolvedChoice(form.industryPreset, form.industryOther);
     if (form.countryPreset === OTHER_OPTION && !country) {
       setFormError("Enter a country when “Other” is selected.");
       return;
@@ -553,12 +645,18 @@ export function ProfilesManager() {
       setFormError("Enter a field when “Other” is selected.");
       return;
     }
+    if (form.industryPreset === OTHER_OPTION && !industry) {
+      setFormError("Enter an industry when “Other” is selected.");
+      return;
+    }
 
     const payload: Record<string, unknown> = {
       name: form.name.trim(),
       country,
       status,
       field,
+      industry,
+      phoneNumber: form.phoneNumber.trim(),
       linkedin: form.linkedin.trim(),
       github: form.github.trim(),
       address: form.address.trim(),
@@ -675,7 +773,7 @@ export function ProfilesManager() {
             />
             <Input
               type="search"
-              placeholder="Search by name, DOB, country, status, field, bidder…"
+              placeholder="Search by name, DOB, country, status, field, industry, phone, bidder…"
               className="pl-9"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
@@ -946,6 +1044,44 @@ export function ProfilesManager() {
               ) : null}
             </div>
             <div className="space-y-2 sm:col-span-2">
+              <Label htmlFor="prof-industry" className="inline-flex items-center gap-2">
+                <Factory className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />
+                Industry
+              </Label>
+              <select
+                id="prof-industry"
+                className={selectClass}
+                value={form.industryPreset}
+                onChange={(e) =>
+                  setForm((f) => ({
+                    ...f,
+                    industryPreset: e.target.value,
+                    industryOther: e.target.value === OTHER_OPTION ? f.industryOther : "",
+                  }))
+                }
+              >
+                <option value="">Not specified</option>
+                {PROFILE_INDUSTRY_OPTIONS.map((opt) => (
+                  <option key={opt} value={opt}>
+                    {opt}
+                  </option>
+                ))}
+              </select>
+              {form.industryPreset === OTHER_OPTION ? (
+                <div className="space-y-1.5 pt-1">
+                  <Label htmlFor="prof-industry-other" className="text-xs text-muted-foreground">
+                    Specify industry
+                  </Label>
+                  <Input
+                    id="prof-industry-other"
+                    placeholder="e.g. Agriculture"
+                    value={form.industryOther}
+                    onChange={(e) => setForm((f) => ({ ...f, industryOther: e.target.value }))}
+                  />
+                </div>
+              ) : null}
+            </div>
+            <div className="space-y-2 sm:col-span-2">
               <Label htmlFor="prof-bidder" className="inline-flex items-center gap-2">
                 <Building2 className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />
                 Bidder (registered)
@@ -1044,6 +1180,21 @@ export function ProfilesManager() {
                   </li>
                 ))}
               </ul>
+            </div>
+            <div className="space-y-2 sm:col-span-2">
+              <Label htmlFor="prof-phone" className="inline-flex items-center gap-2">
+                <Phone className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />
+                Phone number
+              </Label>
+              <Input
+                id="prof-phone"
+                type="tel"
+                autoComplete="tel"
+                placeholder="e.g. +1 555 0100"
+                value={form.phoneNumber}
+                onChange={(e) => setForm((f) => ({ ...f, phoneNumber: e.target.value }))}
+                className="max-w-xl"
+              />
             </div>
             <div className="space-y-2 sm:col-span-2">
               <Label htmlFor="prof-address" className="inline-flex items-center gap-2">
@@ -1249,6 +1400,12 @@ export function ProfilesManager() {
               </ViewField>
               <ViewField icon={Briefcase} label="Field">
                 {viewing.field || "—"}
+              </ViewField>
+              <ViewField icon={Factory} label="Industry">
+                {viewing.industry?.trim() ? viewing.industry : "—"}
+              </ViewField>
+              <ViewField icon={Phone} label="Phone">
+                <span className="tabular-nums">{viewing.phoneNumber?.trim() ? viewing.phoneNumber : "—"}</span>
               </ViewField>
               <ViewField icon={Building2} label="Bidder">
                 {viewing.bidderName ?? "—"}
